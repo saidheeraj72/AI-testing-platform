@@ -24,6 +24,7 @@ from typing import Any
 
 from app.agent.assertions import PageState, VerifyArgs, evaluate, needs_verify_args
 from app.agent.budgets import BudgetExceeded, SessionBudget
+from app.agent.control import SessionControl
 from app.agent.decision import Decision, validator_for
 from app.agent.loops import LoopDetector
 from app.agent.planner import Planner
@@ -72,6 +73,7 @@ class TestAgent:
         test_data: TestData,
         on_event: EventSink = lambda e: None,
         confirm: ConfirmFn | None = None,
+        control: SessionControl | None = None,
     ):
         self.objective = objective
         self.browser = browser
@@ -82,6 +84,7 @@ class TestAgent:
         self.test_data = test_data
         self.emit = on_event
         self.confirm = confirm
+        self.control = control or SessionControl()
 
         self.steps: list[Step] = []
         self.actions: list[ActionResult] = []
@@ -177,6 +180,7 @@ class TestAgent:
         already_true: bool | None = None  # were all checks true before this step did anything?
 
         while True:
+            await self.control.checkpoint()
             self.budget.check_time()
             observation = await self.browser.observe()
             if reason := self.loops.record_page(observation.fingerprint):

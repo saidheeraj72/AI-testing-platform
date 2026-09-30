@@ -2,7 +2,7 @@
 
 A local AI agent that tests a website in a real, visible browser and writes a bug report you can trust.
 
-**Status: Phase 3 (bug engine) done.** Next up is Phase 4, FastAPI + SQLite.
+**Status: Phase 4 (local API + SQLite) done.** Next up is Phase 5, the React UI.
 
 | Phase | Scope | Status |
 |---|---|---|
@@ -10,8 +10,8 @@ A local AI agent that tests a website in a real, visible browser and writes a bu
 | 1 | BrowserSession, observation, domain scope, tracing | done |
 | 2 | Model provider, planner, executor, assertions | done |
 | 3 | Detectors, baseline, bug analyzer, dedup | done |
-| 4 | FastAPI + SQLite | next |
-| 5 | React UI | |
+| 4 | FastAPI + SQLite | done |
+| 5 | React UI | next |
 | 6 | Tauri packaging | |
 
 ## Setup
@@ -43,6 +43,38 @@ Implementation notes:
 - The Ollama provider uses the native `/api/chat`. It is the only Ollama API that can set the context window per request, and Ollama's default of 4096 tokens silently truncates page observations for local models.
 - Some cloud models ignore the API's JSON-schema parameter. So the schema is also stated in the prompt, and replies are unwrapped from code fences before validation.
 - Any OpenAI-compatible server (LM Studio, llama.cpp, vLLM, hosted APIs) works with `provider = "openai_compatible"`.
+
+## Run the local API
+
+```bash
+uv run python -m app            # http://127.0.0.1:8765, token written to data/.api-token
+```
+
+Every request needs the header `X-AI-Tester-Token: <token>`. WebSockets pass it as `?token=`.
+
+| Method | Path | |
+|---|---|---|
+| POST / GET | `/api/projects`, `/api/projects/{id}` | target URL, extra allowed domains, persistent login profile |
+| POST / GET | `/api/sessions`, `/api/sessions/{id}` | create (and start) a session; details include steps, bugs and live state |
+| POST | `/api/sessions/{id}/start` `/pause` `/resume` `/stop` | lifecycle. Pausing is how you take control of the visible browser |
+| POST | `/api/sessions/{id}/confirm` | answer a risky-action confirmation (`confirmation_id`, `allow`) |
+| GET | `/api/sessions/{id}/bugs` `/coverage` `/report` `/events` | results |
+| GET | `/api/sessions/{id}/evidence`, `/files/{path}` | list and download screenshots, trace and logs |
+| WS | `/api/sessions/{id}/events` | live events; replays earlier ones first, ends with `stream_end` |
+
+Session status is one of `CREATED`, `RUNNING`, `PAUSED`, `WAITING_FOR_USER`, `COMPLETED`, `CANCELLED`, `FAILED` or `INTERRUPTED` (the server stopped mid-run). The outcome is `PASS`, `BUGS_FOUND`, `COULD_NOT_VERIFY` or `BLOCKED`.
+
+Storage:
+- **SQLite** at `data/app.db` holds projects, sessions, steps, actions, observations, bugs, bug occurrences and evidence. Migrations (Alembic) run automatically at startup.
+- **Session folders** in `data/sessions/<id>/` keep the full artifacts; database rows point to them.
+
+**Security.** The API drives a browser that may be logged in to real systems, so being on localhost isn't enough protection:
+- It binds to loopback only.
+- It rejects any Host header that isn't a loopback name, which blocks DNS rebinding.
+- It rejects browser Origins that aren't listed in `[server] allowed_origins`.
+- It requires the token, which web pages can't read.
+
+One session can run per project at a time, since a browser profile can only be opened once. `max_concurrent_sessions` sets the limit overall.
 
 ## Run a test
 
@@ -91,6 +123,10 @@ backend/app/
   storage/                 session folder layout and writers
   schemas/                 Observation, Element, ActionResult
   probe.py                 manual driver (python -m app.probe)
+  main.py, __main__.py     FastAPI app and server entry point (python -m app)
+  api/                     routes, local-only security middleware, WebSocket
+  services/                session manager (lifecycle, pause, confirmation), event hub
+  db/                      SQLAlchemy models, repositories, Alembic migrations
 backend/tests/             unit tests + browser tests against a local fixture site
 benchmark/
   seeded-app/              React app with switchable seeded bugs (localhost:3000)

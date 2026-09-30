@@ -65,11 +65,22 @@ class SafetySettings(_Strict):
     risky_actions: Literal["confirm", "allow", "block"] = "confirm"
 
 
+class ServerSettings(_Strict):
+    host: Literal["127.0.0.1", "localhost", "::1"] = "127.0.0.1"  # loopback only, by design
+    port: int = Field(8765, ge=1, le=65535)
+    allowed_origins: list[str] = [
+        "http://localhost:5173", "http://127.0.0.1:5173",  # Vite dev server
+        "tauri://localhost", "http://tauri.localhost",   # packaged app
+    ]
+    max_concurrent_sessions: int = Field(1, ge=1)
+
+
 class Settings(_Strict):
     model: ModelRoles
     agent: AgentSettings = AgentSettings()
     browser: BrowserSettings = BrowserSettings()
     safety: SafetySettings = SafetySettings()
+    server: ServerSettings = ServerSettings()
 
 
 def load_settings(path: Path | None = None) -> Settings:
@@ -115,3 +126,7 @@ def sessions_dir() -> Path:
 
 def profiles_dir() -> Path:
     return data_dir() / "browser_profiles"
+
+
+def database_path() -> Path:
+    return data_dir() / "app.db"

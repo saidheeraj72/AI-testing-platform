@@ -12,6 +12,7 @@ import argparse
 import asyncio
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +25,8 @@ from app.analysis.report_builder import build_report, find_bugs
 from app.browser.observation import ObservationLimits
 from app.browser.profile import ProfileInUseError, profile_dir_for
 from app.browser.session import BrowserConfig, BrowserLaunchError, BrowserSession
-from app.config import ConfigError, Settings, load_settings
+from app.agent.control import SessionControl
+from app.config import ConfigError, ModelSettings, Settings, load_settings
 from app.model.client import StructuredModel
 from app.model.provider import ModelProvider, create_provider
 from app.safety.domain_scope import DomainScope, ScopeError
@@ -43,12 +45,20 @@ async def run_session(
     on_event: EventSink = lambda e: None,
     confirm: ConfirmFn | None = None,
     manifest_extra: dict[str, Any] | None = None,
+    storage: SessionStorage | None = None,
+    control: SessionControl | None = None,
+    provider_factory: Callable[[ModelSettings], ModelProvider] = create_provider,
 ) -> tuple[SessionStorage, dict[str, Any]]:
-    """Run a whole session. Always writes report.json and the trace, even when cancelled or failing."""
+    """Run a whole session. Always writes report.json and the trace, even when cancelled or failing.
+
+    `storage` lets a caller (the API) create the session folder first; `provider_factory`
+    lets tests substitute the model.
+    """
     scope = DomainScope.from_target(url, allow_domains)
-    storage = SessionStorage.create(sessions_dir)
+    storage = storage or SessionStorage.create(sessions_dir)
+    control = control or SessionControl()
     test_data = TestData.generate()
-    budget = SessionBudget(settings.agent)
+    budget = SessionBudget(settings.agent, paused_seconds=control.paused_seconds)
     started = time.monotonic()
     storage.update_manifest(
         objective=objective,
@@ -58,7 +68,7 @@ async def run_session(
         **(manifest_extra or {}),
     )
 
-    providers = _providers(settings)
+    providers = _providers(settings, provider_factory)
     planner_provider, executor_provider, analyzer_provider = (
         providers["planner"], providers["executor"], providers["analyzer"]
     )
@@ -78,6 +88,7 @@ async def run_session(
         test_data=test_data,
         on_event=on_event,
         confirm=confirm,
+        control=control,
     )
 
     on_event({"type": "session_started", "session_id": storage.session_id, "url": url, "objective": objective})
@@ -121,14 +132,16 @@ async def run_session(
     return storage, report
 
 
-def _providers(settings: Settings) -> dict[str, ModelProvider]:
+def _providers(settings: Settings, factory: Callable[[ModelSettings], ModelProvider]) -> dict[str, ModelProvider]:
     """One provider per distinct model configuration, shared by roles that use the same one."""
     by_config: dict[str, ModelProvider] = {}
     roles = {}
     for role in ("planner", "executor", "analyzer"):
         cfg = getattr(settings.model, role)
         key = cfg.model_dump_json()
-        roles[role] = by_config.setdefault(key, create_provider(cfg))
+        if key not in by_config:
+            by_config[key] = factory(cfg)
+        roles[role] = by_config[key]
     return roles
 
 
