@@ -1,0 +1,115 @@
+# Ground truth for the seeded benchmark app.
+#
+# The agent under test never sees this file. Only the evaluator reads it
+# (python -m benchmark.evaluator).
+#
+# Matching rules (all listed criteria must hold; keywords_any is an OR):
+#   network:       some network evidence item of the reported bug matches
+#                  method / url_contains / status
+#   url_contains:  the reported bug's page URL contains this
+#   keywords_any:  one of these appears (case-insensitive) in the bug's title,
+#                  summary, expected, actual, console evidence or network URLs
+
+version: 1
+
+app:
+  url: http://localhost:3000
+  credentials:
+    email: demo@example.com
+    password: password123
+
+bugs:
+  - id: BUG-001
+    title: Creating a customer returns HTTP 500
+    workflow: customers
+    detection: http
+    match:
+      network: { method: POST, url_contains: /api/customers, status: 500 }
+
+  - id: BUG-002
+    title: Cart total ignores item quantity
+    workflow: cart
+    detection: assertion
+    match:
+      keywords_any: [total]
+
+  - id: BUG-003
+    title: Settings accepts an invalid email address
+    workflow: settings
+    detection: assertion
+    match:
+      url_contains: /settings
+      keywords_any: [email, validation, invalid]
+
+  - id: BUG-004
+    title: Logging out does not redirect to the login page
+    workflow: auth
+    detection: assertion
+    match:
+      keywords_any: [log out, logout, logged out, sign out, redirect]
+
+# Always-on distractors. Reporting any of these is a false positive.
+noise:
+  - id: NOISE-001
+    title: Third-party analytics script fails to load
+    reason: third-party request; must be removed by the first-party filter
+    match:
+      keywords_any: [analytics.seeded-app.invalid, tracker.js]
+
+  - id: NOISE-002
+    title: Console error logged on every page load
+    reason: present before any action; must be removed by the baseline filter
+    match:
+      keywords_any: [legacy-widget, feature flag service]
+
+  - id: NOISE-003
+    title: GET /api/me returns 401 while logged out
+    reason: expected 4xx during the login flow
+    match:
+      network: { url_contains: /api/me, status: 401 }
+
+# Each scenario is one agent run. Its objective is passed to the agent verbatim.
+# `bugs` lists the seeded bugs the run should find when they are active. With
+# SEEDED_BUGS=none every scenario is expected to end with PASS.
+scenarios:
+  - id: customer-create
+    objective: >-
+      Log in with demo@example.com / password123. Create a new customer with a
+      unique name and email, then verify the new customer appears in the
+      customer list.
+    bugs: [BUG-001]
+
+  - id: cart-total
+    objective: >-
+      Log in with demo@example.com / password123. Add 2 units of "Wireless
+      Mouse" and 1 unit of "USB-C Hub" to the cart. Open the cart and verify
+      that the cart total equals the sum of the line totals.
+    bugs: [BUG-002]
+
+  - id: settings-email-validation
+    objective: >-
+      Log in with demo@example.com / password123. On the Settings page, try to
+      save the email address "not-an-email". Verify the application rejects it
+      with a validation error and does not save it.
+    bugs: [BUG-003]
+
+  - id: logout-redirect
+    objective: >-
+      Log in with demo@example.com / password123, then log out. Verify that
+      logging out takes the user back to the login page.
+    bugs: [BUG-004]
+
+  # False-positive controls: no seeded bug is reachable in these workflows,
+  # but all noise is present.
+  - id: checkout-single-item
+    objective: >-
+      Log in with demo@example.com / password123. Add 1 unit of "Mechanical
+      Keyboard" to the cart, check out with any shipping address, and verify an
+      order confirmation with an order number is shown.
+    bugs: []
+
+  - id: browse-customers
+    objective: >-
+      Log in with demo@example.com / password123. Open the customer list and
+      verify that the customer "Ada Lovelace" is listed.
+    bugs: []

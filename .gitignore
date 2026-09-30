@@ -1,0 +1,15 @@
+# Local runtime data: SQLite, session artifacts, browser profiles
+data/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Node
+node_modules/
+dist/
+
+.env
+.DS_Store
