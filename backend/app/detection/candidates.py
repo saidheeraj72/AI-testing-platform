@@ -47,13 +47,22 @@ def detect(
     candidates = []
     for seq, group in sorted(incidents.items()):
         action = by_seq.get(seq)
-        step = _step_for(seq, steps)
         failed_check = next(((st, c) for s, st, c in checks if s in group), None)
+        if failed_check:
+            # A verification step may do no browser action: seq then points at the previous step's
+            # last action. The check belongs to its own step, on the page where it was evaluated.
+            step = failed_check[0]
+            if not (step.first_action is not None and step.first_action <= seq):
+                action = None
+            url = step.end_url
+        else:
+            step = _step_for(seq, steps)
+            url = action.url_before if action else (step.end_url if step else None)
         candidates.append(Candidate(
             action_seq=seq,
             step=step.sequence if step else None,
             step_goal=step.goal if step else None,
-            url=(action.url_before if action else step.end_url if step else None) or scope.target_url,
+            url=url or scope.target_url,
             action=_describe(action),
             signals=group,
             network=[NetworkEvidence(method=e.method, url=e.url, status=e.status, failure=e.failure,

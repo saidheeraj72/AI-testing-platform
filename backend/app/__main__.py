@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import socket
 import sys
 
 import uvicorn
@@ -15,6 +16,11 @@ import uvicorn
 from app.api.security import new_token, write_token_file
 from app.config import ConfigError, data_dir, load_settings
 from app.main import create_app
+
+
+def port_in_use(host: str, port: int) -> bool:
+    with socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET) as s:
+        return s.connect_ex((host, port)) == 0
 
 
 def main() -> int:
@@ -29,10 +35,15 @@ def main() -> int:
     if args.port:
         settings.server.port = args.port
 
+    host, port = settings.server.host, settings.server.port
+    if port_in_use(host, port):
+        # Checked before writing the token file, so a running server's token is not overwritten.
+        print(f"error: {host}:{port} is in use. Is AI Tester already running?", file=sys.stderr)
+        return 1
+
     token = os.environ.get("AI_TESTER_TOKEN") or new_token()
     token_file = data_dir() / ".api-token"
     write_token_file(token_file, token)
-    host, port = settings.server.host, settings.server.port
     print(f"AI Tester API on http://{host}:{port}\nToken written to {token_file}")
 
     uvicorn.run(create_app(settings, token=token), host=host, port=port, log_level="info")

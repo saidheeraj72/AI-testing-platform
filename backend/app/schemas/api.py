@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any
+from datetime import datetime, timezone
+from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
 from app.safety.domain_scope import DomainScope, ScopeError
+
+
+def _utc(value: datetime) -> datetime:
+    """SQLite returns naive datetimes; they are stored in UTC."""
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+
+UtcDatetime = Annotated[datetime, AfterValidator(_utc)]
 
 
 class ProjectCreate(BaseModel):
@@ -34,7 +42,7 @@ class ProjectOut(BaseModel):
     target_url: str
     allowed_domains: list[str]
     persistent_profile: bool
-    created_at: datetime
+    created_at: UtcDatetime
 
 
 class SessionCreate(BaseModel):
@@ -53,9 +61,9 @@ class SessionOut(BaseModel):
     outcome: str | None
     reason: str | None
     model: str | None
-    created_at: datetime
-    started_at: datetime | None
-    finished_at: datetime | None
+    created_at: UtcDatetime
+    started_at: UtcDatetime | None
+    finished_at: UtcDatetime | None
     duration_ms: int | None
     steps_planned: int
     steps_completed: int

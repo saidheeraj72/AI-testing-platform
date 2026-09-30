@@ -2,7 +2,7 @@
 
 A local AI agent that tests a website in a real, visible browser and writes a bug report you can trust.
 
-**Status: Phase 4 (local API + SQLite) done.** Next up is Phase 5, the React UI.
+**Status: Phase 5 (React UI) done.** Next up is Phase 6: human takeover and auth polish.
 
 | Phase | Scope | Status |
 |---|---|---|
@@ -11,8 +11,9 @@ A local AI agent that tests a website in a real, visible browser and writes a bu
 | 2 | Model provider, planner, executor, assertions | done |
 | 3 | Detectors, baseline, bug analyzer, dedup | done |
 | 4 | FastAPI + SQLite | done |
-| 5 | React UI | next |
-| 6 | Tauri packaging | |
+| 5 | React UI | done |
+| 6 | Human takeover and auth polish | next |
+| 7 | Tauri packaging | |
 
 ## Setup
 
@@ -20,6 +21,25 @@ A local AI agent that tests a website in a real, visible browser and writes a bu
 uv sync                                  # Python env (evaluator, tests)
 cd benchmark/seeded-app && npm install   # benchmark app
 ```
+
+## Quick start
+
+```bash
+uv sync && (cd frontend && npm install)
+ollama signin                        # once, for the default cloud model
+uv run python scripts/dev.py         # API + UI; open http://127.0.0.1:5173
+```
+
+`scripts/dev.py` generates a fresh API token and starts the API server and the UI with it. Ctrl+C stops both. The UI has three screens:
+
+- **New test**: enter a website and an objective, then Start testing. A project (the target site plus its browser profile) is reused when the URL matches.
+- **Session**:
+  - While running: the live plan with each step's checks, the activity feed (the agent's reasoning and every action), and the controls.
+    - **Take control** pauses the agent so you can use the Chrome window yourself, for example to log in. **Resume AI** continues.
+    - **Stop** ends the test and keeps the report and trace.
+    - A banner appears when the agent wants to do something risky (delete, pay, place an order…): **Allow once** or **Refuse**.
+  - When finished: the summary, the bugs, what could not be verified or was not tested, the plan with its check results, the timeline, and the evidence files (including the Playwright trace).
+- **Bug**: expected and actual, steps to reproduce, screenshots, the failing requests with response bodies, console errors, and occurrences.
 
 ## Model setup (Ollama)
 
@@ -128,6 +148,8 @@ backend/app/
   services/                session manager (lifecycle, pause, confirmation), event hub
   db/                      SQLAlchemy models, repositories, Alembic migrations
 backend/tests/             unit tests + browser tests against a local fixture site
+frontend/                  React + TypeScript UI (Vite, react-query); npm test runs the reducer tests
+scripts/dev.py             starts API + UI with a shared token
 benchmark/
   seeded-app/              React app with switchable seeded bugs (localhost:3000)
   expected-results.yaml    ground truth: bugs, noise, scenarios

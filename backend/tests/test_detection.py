@@ -171,3 +171,13 @@ async def test_without_a_model_strong_is_described_by_rules_weak_stays_unconfirm
 def test_outcome(agent, has_bugs, expected):
     bugs = [object()] if has_bugs else []
     assert outcome(AgentResult(outcome=agent, reason="", steps=[]), bugs) == expected
+
+
+def test_failed_check_in_a_step_without_actions_belongs_to_that_step():
+    grounded = CheckResult(criterion=Criterion(type="sum_equals", grounded=True), passed=False, detail="wrong total")
+    verify = step(5, "Verify the total", 9, 8, StepStatus.FAILED, [grounded])  # no actions: first 9 > last 8
+    verify.end_url = f"{APP}/cart"
+    candidates = run(steps=[step(4, "Open the cart", 8, 8), verify],
+                     actions=[action(8, target="Cart", url="/shop")])
+    c = candidates[0]
+    assert (c.step, c.url, c.action) == (5, f"{APP}/cart", None)

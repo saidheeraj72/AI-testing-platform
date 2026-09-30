@@ -272,7 +272,7 @@ class TestAgent:
             policy = self.settings.safety.risky_actions
             allowed = policy == "allow"
             if policy == "confirm":
-                self.emit({"type": "confirmation_required", "step": step.sequence, "action": reason})
+                # The confirm callback owns the user-facing event (the API adds a confirmation id).
                 allowed = await self.confirm(reason) if self.confirm else False
             if not allowed:
                 self._end(step, StepStatus.BLOCKED, [], f"risky action not allowed: {reason}")
