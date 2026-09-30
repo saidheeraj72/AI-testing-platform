@@ -18,13 +18,15 @@ from typing import Any
 from app.agent.agent import AgentResult, ConfirmFn, EventSink, TestAgent
 from app.agent.budgets import SessionBudget
 from app.agent.test_data import TestData
-from app.analysis.report_builder import build_report
+from app.agent.budgets import BudgetExceeded
+from app.analysis.bug_analyzer import BugAnalyzer
+from app.analysis.report_builder import build_report, find_bugs
 from app.browser.observation import ObservationLimits
 from app.browser.profile import ProfileInUseError, profile_dir_for
 from app.browser.session import BrowserConfig, BrowserLaunchError, BrowserSession
 from app.config import ConfigError, Settings, load_settings
 from app.model.client import StructuredModel
-from app.model.provider import create_provider
+from app.model.provider import ModelProvider, create_provider
 from app.safety.domain_scope import DomainScope, ScopeError
 from app.schemas.plan import Criterion, StepStatus
 from app.storage.manager import SessionStorage
@@ -56,10 +58,9 @@ async def run_session(
         **(manifest_extra or {}),
     )
 
-    planner_provider = create_provider(settings.model.planner)
-    executor_provider = (
-        planner_provider if settings.model.executor == settings.model.planner
-        else create_provider(settings.model.executor)
+    providers = _providers(settings)
+    planner_provider, executor_provider, analyzer_provider = (
+        providers["planner"], providers["executor"], providers["analyzer"]
     )
     browser = BrowserSession(scope, storage, BrowserConfig(
         headless=settings.browser.headless,
@@ -81,32 +82,66 @@ async def run_session(
 
     on_event({"type": "session_started", "session_id": storage.session_id, "url": url, "objective": objective})
     result = AgentResult(outcome="FAILED", reason="did not start", steps=[])
+    cancelled = False
     try:
         await browser.start()
         result = await agent.run()
     except (BrowserLaunchError, ProfileInUseError) as e:
         result = AgentResult(outcome="FAILED", reason=str(e), steps=[])
     except asyncio.CancelledError:
+        cancelled = True
         agent.abort(StepStatus.COULD_NOT_VERIFY, "cancelled by the user")
         result = AgentResult(outcome="CANCELLED", reason="cancelled by the user", steps=agent.steps,
                              actions=agent.actions)
         raise
     finally:
         await browser.stop()
-        for provider in {planner_provider, executor_provider}:
+        # A cancelled session is described by rules only, so stopping stays fast.
+        analyzer_model = None
+        if not cancelled and settings.agent.max_analyzer_calls:
+            analyzer_model = StructuredModel(analyzer_provider, storage,
+                                             before_call=_call_limit(settings.agent.max_analyzer_calls))
+        bugs, unconfirmed, baseline_ignored = await find_bugs(
+            result=result, browser=browser, analyzer=BugAnalyzer(analyzer_model, objective), on_event=on_event,
+        )
+        for provider in set(providers.values()):
             await provider.close()
         duration_ms = int((time.monotonic() - started) * 1000)
         report = build_report(
             session_id=storage.session_id, objective=objective, result=result, browser=browser,
+            bugs=bugs, unconfirmed=unconfirmed, baseline_ignored=baseline_ignored,
             extra={"test_data": test_data.model_dump(), "model_calls": budget.model_calls,
                    "duration_ms": duration_ms},
         )
         storage.write_json(storage.paths.report, report)
-        storage.update_manifest(outcome=result.outcome, duration_ms=duration_ms,
+        storage.update_manifest(outcome=report["outcome"], duration_ms=duration_ms,
                                 model_calls=budget.model_calls, bugs=len(report["bugs"]))
-        on_event({"type": "session_completed", "outcome": result.outcome, "reason": result.reason,
+        on_event({"type": "session_completed", "outcome": report["outcome"], "reason": result.reason,
                   "report": str(storage.paths.report)})
     return storage, report
+
+
+def _providers(settings: Settings) -> dict[str, ModelProvider]:
+    """One provider per distinct model configuration, shared by roles that use the same one."""
+    by_config: dict[str, ModelProvider] = {}
+    roles = {}
+    for role in ("planner", "executor", "analyzer"):
+        cfg = getattr(settings.model, role)
+        key = cfg.model_dump_json()
+        roles[role] = by_config.setdefault(key, create_provider(cfg))
+    return roles
+
+
+def _call_limit(limit: int):
+    calls = 0
+
+    def before_call() -> None:
+        nonlocal calls
+        if calls >= limit:
+            raise BudgetExceeded(f"analyzer call limit of {limit} reached")
+        calls += 1
+
+    return before_call
 
 
 # ---------------------------------------------------------------------- CLI output
@@ -135,6 +170,8 @@ def print_event(event: dict[str, Any]) -> None:
         print(f"    {mark} {event['action']}{target}{err}")
     elif kind == "step_finished":
         print(f"  = {event['status']}: {event['reason']}\n")
+    elif kind == "bug_confirmed":
+        print(f"  ! {event['id']} [{event['severity']}] {event['title']}")
     elif kind == "session_completed":
         print(f"RESULT: {event['outcome']}" + (f" ({event['reason']})" if event["reason"] else ""))
         print(f"Report: {event['report']}")
@@ -181,7 +218,8 @@ async def main(argv: list[str] | None = None) -> int:
         allow_domains=args.allow_domain, on_event=print_event, confirm=terminal_confirm,
     )
     for bug in report["bugs"]:
-        print(f"\nBUG: {bug['title']}\n  expected: {bug['expected']}\n  actual:   {bug['actual']}")
+        print(f"\n{bug['id']} [{bug['severity']}] {bug['title']}\n  expected: {bug['expected']}\n"
+              f"  actual:   {bug['actual']}\n  occurrences: {len(bug['occurrences'])}")
     return 0 if report["outcome"] in ("PASS", "BUGS_FOUND") else 1
 
 

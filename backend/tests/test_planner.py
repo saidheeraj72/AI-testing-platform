@@ -1,30 +1,38 @@
 import pytest
 
-from app.agent.planner import Planner, is_grounded
+from app.agent.planner import Planner, is_grounded, literals
 from app.agent.test_data import TestData
 from app.schemas.plan import PlannedCriterion, PlannedStep, PlannerOutput
 
 DATA = TestData.generate("qa123abc")
-OBJECTIVE = "Log in, log out and verify the user is back on the login page. Check the cart total."
-CORPUS = " ".join([OBJECTIVE, *DATA.model_dump().values()]).casefold()
+OBJECTIVE = ('Log in, then log out and verify the user is back on the login page at /login. '
+             'Save the email "not-an-email". Verify an order confirmation is shown. Check the cart total.')
+STATED = literals(OBJECTIVE, DATA)
 
 
 @pytest.mark.parametrize("criterion, grounded", [
-    (dict(type="text_visible", value="Test User-qa123abc"), True),
-    (dict(type="text_visible", value="Customer created"), False),
-    (dict(type="url_contains", value="/login"), True),
+    (dict(type="text_visible", value="Test User-qa123abc"), True),        # generated test data
+    (dict(type="field_value", name="Email", value="not-an-email"), True),  # quoted in the objective
+    (dict(type="url_contains", value="/login"), True),                     # path in the objective
+    (dict(type="text_visible", value="Order confirmation"), False),        # prose, not a stated value
+    (dict(type="text_visible", value="Welcome Test User-qa123abc"), False),
     (dict(type="url_contains", value="/dashboard"), False),
     (dict(type="sum_equals"), True),
     (dict(type="request_succeeded", value="/api/login", method="POST"), False),
     (dict(type="element_present", role="alert"), False),
 ])
 def test_grounding(criterion, grounded):
-    assert is_grounded(PlannedCriterion(**criterion), CORPUS) is grounded
+    assert is_grounded(PlannedCriterion(**criterion), OBJECTIVE, STATED) is grounded
 
 
 def test_alert_grounded_when_objective_expects_an_error():
-    corpus = "verify the application rejects it with a validation error"
-    assert is_grounded(PlannedCriterion(type="element_present", role="alert"), corpus)
+    objective = "verify the application rejects it with a validation error"
+    assert is_grounded(PlannedCriterion(type="element_present", role="alert"), objective, set())
+
+
+def test_literals():
+    stated = literals('Open /settings/profile, type "Ada" and \'Bob\', see "Are you sure?", mail ann@x.io.', DATA)
+    assert {"/settings/profile", "ada", "bob", "are you sure?", "ann@x.io", "test+qa123abc@example.com"} <= stated
 
 
 def step(goal, *criteria):

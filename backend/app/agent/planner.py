@@ -1,7 +1,7 @@
 """Creates the step plan and, when a step cannot be completed, replans the remaining work.
 
-Grounding is decided here, in code: a criterion is grounded when every
-significant token of its expected value comes from the objective or the
+Grounding is decided here, in code: a criterion is grounded when its expected
+value is exactly something the user stated (quoted text, a URL path) or the
 generated test data. Only grounded checks can turn into bug reports; a failed
 guess about the UI means "could not verify".
 """
@@ -17,7 +17,6 @@ from app.model.provider import Message
 from app.schemas.observation import Observation
 from app.schemas.plan import Criterion, PlannedCriterion, PlannerOutput, Step
 
-_TOKEN = re.compile(r"[a-z0-9][a-z0-9@+._-]{2,}")
 _ERROR_WORDS = ("error", "invalid", "reject", "validation", "warning", "fail")
 
 
@@ -85,13 +84,13 @@ class Planner:
             step.criteria = usable[:3]  # an intermediate step may end up unchecked
 
     def _to_steps(self, output: PlannerOutput, objective: str, test_data: TestData, first_sequence: int) -> list[Step]:
-        corpus = " ".join([objective, *test_data.model_dump().values()]).casefold()
+        stated = literals(objective, test_data)
         return [
             Step(
                 sequence=first_sequence + i,
                 goal=planned.goal.strip(),
                 criteria=[
-                    Criterion(**c.model_dump(), grounded=is_grounded(c, corpus))
+                    Criterion(**c.model_dump(), grounded=is_grounded(c, objective, stated))
                     for c in planned.criteria
                 ],
             )
@@ -114,15 +113,36 @@ def _criterion_problem(c: PlannedCriterion) -> str | None:
     return f"{c.type} needs {fields}"
 
 
-def is_grounded(c: PlannedCriterion, corpus: str) -> bool:
-    """True when the check's expectation comes from the objective or the test data."""
+def literals(objective: str, test_data: TestData) -> set[str]:
+    """Exact values the user stated: quoted strings, URL paths, e-mail addresses, plus generated test data."""
+    found = set()
+    for pattern in (r'"([^"]+)"', r"“([^”]+)”", r"(?<!\w)'([^']+)'(?!\w)"):
+        found.update(m.strip() for m in re.findall(pattern, objective))
+    # Paths and addresses end where the sentence does: "go back to /login."
+    for pattern in (r"(?<![\w/])(/[\w\-./]+)", r"([\w.+-]+@[\w-]+\.[\w.]+)"):
+        found.update(m.rstrip(".,;:!?)") for m in re.findall(pattern, objective))
+    found.update(v for k, v in test_data.model_dump().items() if k != "tag")
+    return {_norm(v) for v in found if v.strip()}
+
+
+def is_grounded(c: PlannedCriterion, objective: str, stated: set[str]) -> bool:
+    """True when the check's expectation is something the user stated exactly.
+
+    Prose is not enough: "verify an order confirmation is shown" does not say
+    the page contains the text "Order confirmation". Only exact values (quoted
+    text, URL paths, generated test data) can make a mismatch a bug.
+    """
+    text = objective.casefold()
     if c.type == "request_succeeded":
         # Its URL is a guess. An HTTP error on a matching request is still reported: see CheckResult.app_error.
         return False
     if c.type == "sum_equals":
-        return any(w in corpus for w in ("total", "sum", "add up"))
+        return any(w in text for w in ("total", "sum", "add up"))
     if c.type == "element_present" and c.role in ("alert", "status") and not c.name:
-        return any(w in corpus for w in _ERROR_WORDS)
-    key = c.value if c.type != "element_present" else c.name
-    tokens = _TOKEN.findall((key or "").casefold())
-    return bool(tokens) and all(t in corpus for t in tokens)
+        return any(w in text for w in _ERROR_WORDS)
+    value = c.name if c.type == "element_present" else c.value
+    return bool(value) and _norm(value) in stated
+
+
+def _norm(value: str) -> str:
+    return " ".join(value.split()).casefold()

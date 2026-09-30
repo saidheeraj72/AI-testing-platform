@@ -97,7 +97,7 @@ scenarios:
   - id: logout-redirect
     objective: >-
       Log in with demo@example.com / password123, then log out. Verify that
-      logging out takes the user back to the login page.
+      logging out takes the user back to the login page at /login.
     bugs: [BUG-004]
 
   # False-positive controls: no seeded bug is reachable in these workflows,

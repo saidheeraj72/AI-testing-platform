@@ -65,3 +65,11 @@ def test_settings_file_and_role_overrides(tmp_path):
 
 def test_repo_config_is_valid():
     assert load_settings().model.default.provider == "ollama"
+
+
+def test_extract_json_from_fenced_or_wrapped_replies():
+    from app.model.client import extract_json
+
+    assert extract_json('{"a": 1}') == '{"a": 1}'
+    assert extract_json('```json\n{"a": 1}\n```') == '{"a": 1}'
+    assert extract_json('Here you go: {"a": {"b": 2}} done') == '{"a": {"b": 2}}'

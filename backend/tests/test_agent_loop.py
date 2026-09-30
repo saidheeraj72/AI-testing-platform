@@ -114,7 +114,7 @@ async def test_grounded_check_failing_after_verifies_is_a_bug(site, tmp_path):
         act("type", 'textbox "Name"', text="Test User-qa1", submit=True),
         act("verify"),
         act("verify"),
-    ], objective="Submit Test User-qa1 and check that 'Welcome Test User-qa1' is shown")
+    ], objective='Submit Test User-qa1 and check that "Welcome Test User-qa1" is shown')
     step = result.steps[0]
     assert step.status == StepStatus.FAILED
     assert step.checks[0].criterion.grounded
@@ -230,7 +230,7 @@ async def test_pure_verification_step_can_fail_without_actions(site, tmp_path):
               [{"type": "text_visible", "value": "Welcome Test User-qa1"}])),
         act("verify"),
         act("verify"),
-    ], objective="Verify 'Welcome Test User-qa1' is shown")
+    ], objective='Verify "Welcome Test User-qa1" is shown')
     assert result.steps[0].status == StepStatus.FAILED
 
 
@@ -239,5 +239,37 @@ async def test_doing_step_is_not_failed_when_the_agent_only_verified(site, tmp_p
         plan(("Create the user Test User-qa1", [{"type": "text_visible", "value": "Welcome Test User-qa1"}])),
         act("verify"),
         act("verify"),
-    ], objective="Create 'Welcome Test User-qa1'", max_replans=0)
+    ], objective='Create "Welcome Test User-qa1"', max_replans=0)
+    assert result.steps[0].status == StepStatus.COULD_NOT_VERIFY
+
+
+async def test_field_value_the_agent_typed_is_inconclusive_until_reload(site, tmp_path):
+    result, _, _ = await run_agent(site, tmp_path, [
+        plan(("Enter the name and check it was not kept",
+              [{"type": "field_value", "name": "Name", "value": "not-a-name", "negate": True}])),
+        act("type", 'textbox "Name"', text="not-a-name"),
+        act("verify"),
+        act("verify"),
+    ], objective='Type "not-a-name" and verify it is not kept', max_replans=0)
+    step = result.steps[0]
+    assert step.status == StepStatus.COULD_NOT_VERIFY  # not FAILED: no bug from the agent's own typing
+    assert step.checks[0].inconclusive
+
+
+async def test_app_not_reacting_to_the_steps_own_action_is_a_bug(site, tmp_path):
+    # Clicking "Save" shows "Saved" but never goes to /page2, as the objective demands.
+    result, _, _ = await run_agent(site, tmp_path, [
+        plan(("Click Save", [{"type": "url_contains", "value": "/page2"}])),
+        *[act("click", 'button "Save"') for _ in range(3)],
+    ], objective="Click Save and verify the app goes to /page2", max_replans=0)
+    step = result.steps[0]
+    assert step.status == StepStatus.FAILED
+    assert "did not react" in step.reason
+
+
+async def test_repeating_an_unrelated_action_is_just_stuck(site, tmp_path):
+    result, _, _ = await run_agent(site, tmp_path, [
+        plan(("Open the report", [{"type": "url_contains", "value": "/page2"}])),
+        *[act("click", 'button "Save"') for _ in range(3)],
+    ], objective="Open the report and verify the app goes to /page2", max_replans=0)
     assert result.steps[0].status == StepStatus.COULD_NOT_VERIFY

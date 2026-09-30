@@ -29,7 +29,7 @@ class ModelSettings(_Strict):
     api_key: str = ""
     temperature: float = 0.0
     context_window: int = Field(8192, ge=2048)
-    think: bool = False
+    think: bool | Literal["low", "medium", "high"] = False  # levels for models like gpt-oss
     timeout_seconds: float = Field(180, gt=0)
     max_output_tokens: int = Field(1024, ge=64)
     max_repairs: int = Field(2, ge=0)
@@ -37,11 +37,12 @@ class ModelSettings(_Strict):
 
 
 class ModelRoles(_Strict):
-    """[model] plus optional [model.planner] / [model.executor] overrides."""
+    """[model] plus optional [model.planner] / [model.executor] / [model.analyzer] overrides."""
 
     default: ModelSettings
     planner: ModelSettings
     executor: ModelSettings
+    analyzer: ModelSettings
 
 
 class AgentSettings(_Strict):
@@ -52,6 +53,7 @@ class AgentSettings(_Strict):
     max_model_calls: int = Field(80, ge=1)
     max_duration_seconds: float = Field(900, gt=0)
     observation_max_chars: int = Field(6000, ge=1000)
+    max_analyzer_calls: int = Field(12, ge=0)  # separate from max_model_calls; 0 disables AI analysis
 
 
 class BrowserSettings(_Strict):
@@ -78,7 +80,7 @@ def load_settings(path: Path | None = None) -> Settings:
         raise ConfigError(f"{path}: invalid TOML: {e}") from e
 
     model = dict(raw.pop("model", {}))
-    overrides = {role: model.pop(role, None) or {} for role in ("planner", "executor")}
+    overrides = {role: model.pop(role, None) or {} for role in ("planner", "executor", "analyzer")}
     if key := os.environ.get("AI_TESTER_MODEL_API_KEY"):
         model["api_key"] = key
     try:

@@ -30,8 +30,10 @@ class OpenAICompatibleProvider(ModelProvider):
             "max_tokens": s.max_output_tokens,
             "response_format": {"type": "json_schema", "json_schema": {"name": "response", "schema": schema}},
         }
-        if not s.think:
+        if s.think is False:
             body["reasoning_effort"] = "none"
+        elif isinstance(s.think, str):
+            body["reasoning_effort"] = s.think
         try:
             response = await self._client.post("/chat/completions", json=body)
         except httpx.TimeoutException:

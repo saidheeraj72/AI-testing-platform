@@ -87,6 +87,7 @@ class CheckResult(BaseModel):
     passed: bool
     detail: str
     app_error: bool = Field(False, description="failed because the application returned an error")
+    inconclusive: bool = Field(False, description="the page state could not show the answer yet")
 
 
 class Step(BaseModel):

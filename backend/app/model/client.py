@@ -7,6 +7,7 @@ attempts, because that file is the main tool for debugging agent behaviour.
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -52,8 +53,10 @@ class StructuredModel:
         `validate` raises ValueError with a message the model can act on.
         Invalid replies are sent back with the error, up to max_repairs times.
         """
-        conversation = list(messages)
         json_schema = schema.model_json_schema()
+        # Some backends (e.g. some Ollama cloud models) ignore the API's schema parameter,
+        # so the schema is also stated in the prompt.
+        conversation = _with_schema_instruction(list(messages), json_schema)
         for attempt in range(self.provider.settings.max_repairs + 1):
             self._before_call()
             self.calls += 1
@@ -66,7 +69,7 @@ class StructuredModel:
             error: str | None = None
             parsed: T | None = None
             try:
-                parsed = schema.model_validate_json(completion.text)
+                parsed = schema.model_validate_json(extract_json(completion.text))
                 if validate:
                     validate(parsed)
             except ValidationError as e:
@@ -95,6 +98,28 @@ class StructuredModel:
                 Message("user", f"That reply was invalid: {error}\nReply again with corrected JSON only."),
             ]
         raise InvalidModelOutput(f"{purpose}: model output still invalid after retries: {error}")
+
+
+def _with_schema_instruction(messages: list[Message], json_schema: dict) -> list[Message]:
+    instruction = (
+        "\n\nReply with one JSON object only (no markdown, no code fences) that matches this JSON schema. "
+        "Use exactly these field names:\n" + json.dumps(json_schema, separators=(",", ":"))
+    )
+    if messages and messages[0].role == "system":
+        return [Message("system", messages[0].content + instruction), *messages[1:]]
+    return [Message("system", instruction.strip()), *messages]
+
+
+def extract_json(text: str) -> str:
+    """The JSON object in a reply, without code fences or surrounding prose."""
+    text = text.strip()
+    if text.startswith("{"):
+        return text
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.S)
+    if fenced:
+        return fenced[1]
+    start, end = text.find("{"), text.rfind("}")
+    return text[start:end + 1] if 0 <= start < end else text
 
 
 def _short_validation_error(e: ValidationError) -> str:

@@ -52,6 +52,8 @@ def test_negate():
 
 def test_element_and_field():
     assert check(type="element_present", role="alert").passed
+    assert check(type="element_present", role="alert", name="Enter a valid email").passed
+    assert not check(type="element_present", role="alert", name="Saved").passed
     assert check(type="element_present", role="table", name="cart").passed
     assert not check(type="element_present", role="dialog").passed
     assert check(type="field_value", name="Name", value="John-typed").passed

@@ -35,6 +35,7 @@ class ActionResult(BaseModel):
     http_status: int | None = None
     settled: bool = True
     duration_ms: int = 0
+    screenshot: str | None = None  # captured automatically when the action caused a serious error
 
     @property
     def navigated(self) -> bool:

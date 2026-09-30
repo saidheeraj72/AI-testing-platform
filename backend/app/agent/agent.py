@@ -16,6 +16,7 @@ After a step that did not pass, the remaining steps are SKIPPED.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -87,6 +88,7 @@ class TestAgent:
         self.replans_left = settings.agent.max_replans
         self.loops = LoopDetector()
         self._url_typed_by_agent: str | None = None  # page the agent reached with its own navigate
+        self._typed_fields: set[str] = set()  # fields the agent typed into since the page last loaded
 
     # ------------------------------------------------------------------ session
 
@@ -215,7 +217,7 @@ class TestAgent:
                 verify_failures += 1
                 if verify_failures >= cfg.max_verify_failures:
                     # Without an action, a failed check only means something in a pure verification step.
-                    grounded = [r for r in failed if r.criterion.grounded]
+                    grounded = [r for r in failed if r.criterion.grounded and not r.inconclusive]
                     if grounded and (acted or needs_args or _is_verification(step)):
                         self._end(step, StepStatus.FAILED, results,
                                   f"{grounded[0].criterion.describe()}: {grounded[0].detail}")
@@ -229,6 +231,7 @@ class TestAgent:
             feedback = await self._act(step, decision, observation)
             acted += 1
             if reason := self.loops.record_action(decision.signature()):
+                await self._app_ignored(step, self.actions[-1])
                 await self._unfinished(step, f"stuck: {reason}", observation)
 
     async def _decide(self, step: Step, observation: Observation, feedback: str) -> Decision:
@@ -289,6 +292,10 @@ class TestAgent:
             case _:
                 result = await b.wait(1.0)
         self.actions.append(result)
+        if result.navigated or d.action in ("navigate", "go_back"):
+            self._typed_fields.clear()
+        if result.ok and d.action in ("type", "select") and result.target:
+            self._typed_fields.add(result.target.name.casefold())
         if result.ok and d.action == "navigate":
             self._url_typed_by_agent = result.url_after
         elif result.navigated:
@@ -309,12 +316,24 @@ class TestAgent:
         return results
 
     def _credit(self, result: CheckResult) -> CheckResult:
-        """A grounded URL check must be reached by the application, not by the agent typing the URL.
+        """Only credit what the application did, not what the agent did.
 
-        Otherwise "logging out returns to the login page" would pass whenever the
-        agent gives up waiting and opens /login itself.
+        - A field value the agent typed on this page is inconclusive until the page reloads.
+        - A grounded URL check fails if the agent opened that URL itself; otherwise
+          "logging out returns to the login page" would pass whenever the agent
+          gives up waiting and opens /login.
         """
         c = result.criterion
+        if c.type == "field_value" and any(
+            (c.name or "").casefold() in typed for typed in self._typed_fields
+        ):
+            # A field still showing what the agent typed says nothing about what the app saved.
+            return result.model_copy(update={
+                "passed": False,
+                "inconclusive": True,
+                "detail": f"{result.detail}, but that is what the agent typed; reload the page "
+                          "(navigate to the same URL) to see the saved value",
+            })
         if (result.passed and c.grounded and c.type == "url_contains" and not c.negate
                 and self._url_typed_by_agent == self.browser.page.url):
             return result.model_copy(update={
@@ -328,6 +347,25 @@ class TestAgent:
         if results:
             step.checks = results
         raise _StepEnded
+
+    async def _app_ignored(self, step: Step, repeated: ActionResult) -> None:
+        """The agent kept doing exactly what the step says, it worked each time, and nothing happened.
+
+        Example: clicking "Log out" three times without being taken to /login.
+        Then the grounded expectation failing is the application's fault, not the
+        agent's. Repeating an unrelated action is just the agent being stuck.
+        """
+        if not (repeated.ok and repeated.target and _matches_goal(repeated.target.name, step.goal)):
+            return
+        page = PageState(self.browser.page.url, self.browser.last_nodes,
+                         self.browser.network.since(step.first_action or 0))
+        results = [self._credit(evaluate(c, page)) for c in step.criteria]
+        failed = [r for r in results if not r.passed and r.criterion.grounded and not r.inconclusive]
+        if failed:
+            target = f'{repeated.target.role} "{repeated.target.name}"'
+            self._end(step, StepStatus.FAILED, results,
+                      f"the application did not react to {repeated.action} {target}: "
+                      f"{failed[0].criterion.describe()} -> {failed[0].detail}")
 
     async def _unfinished(self, step: Step, reason: str, observation: Observation) -> None:
         """The agent could not complete the step: record an app error if the checks show one, else replan."""
@@ -350,6 +388,13 @@ class TestAgent:
                        "steps": [s.model_dump(mode="json") for s in new_steps]})
             self._end(step, StepStatus.REPLANNED, results, reason)
         self._end(step, StepStatus.COULD_NOT_VERIFY, results, reason)
+
+
+def _matches_goal(label: str, goal: str) -> bool:
+    """Every word of the element's label appears in the step goal ("Log out" in "Log out of the app")."""
+    words = re.findall(r"[a-z0-9]+", label.casefold())
+    goal_words = set(re.findall(r"[a-z0-9]+", goal.casefold()))
+    return bool(words) and all(w in goal_words for w in words)
 
 
 def _is_verification(step: Step) -> bool:

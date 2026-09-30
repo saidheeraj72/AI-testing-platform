@@ -1,19 +1,50 @@
-"""Builds report.json for a session.
-
-For now bugs come only from FAILED steps: a grounded check that failed, or
-the application returning an error on the step's own request. Each carries
-the network and console evidence from that step. The Phase 3 bug engine
-(detectors, baseline, AI analysis, deduplication) will replace this.
-"""
+"""Turns a finished session into report.json: bugs, unconfirmed signals, and what was (not) verified."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlsplit
 
 from app.agent.agent import AgentResult
+from app.analysis.bug_analyzer import BugAnalyzer
+from app.analysis.deduplicator import deduplicate
 from app.browser.session import BrowserSession
+from app.detection.candidates import detect
+from app.schemas.bug import Bug, Candidate
 from app.schemas.plan import Step, StepStatus
+
+
+async def find_bugs(
+    *,
+    result: AgentResult,
+    browser: BrowserSession,
+    analyzer: BugAnalyzer,
+    on_event: Callable[[dict[str, Any]], None] = lambda e: None,
+) -> tuple[list[Bug], list[dict[str, Any]], int]:
+    """Returns (bugs, unconfirmed signals, number of baseline signatures ignored)."""
+    candidates, baseline = detect(
+        network=browser.network.events,
+        console=browser.console.events,
+        steps=result.steps,
+        actions=result.actions,
+        scope=browser.scope,
+    )
+    analyzed = []
+    unconfirmed = []
+    for candidate in candidates:
+        on_event({"type": "bug_candidate", "step": candidate.step, "signals": [s.summary for s in candidate.signals]})
+        analysis, described_by = await analyzer.analyze(candidate)
+        if analysis is None:
+            unconfirmed.append({"step": candidate.step, "url": candidate.url, "action": candidate.action,
+                                "signals": [s.summary for s in candidate.signals], "decided_by": described_by})
+            continue
+        analyzed.append((candidate, analysis, described_by, _reproduce(candidate, result.steps)))
+
+    bugs = deduplicate(analyzed)
+    for bug in bugs:
+        on_event({"type": "bug_confirmed", "id": bug.id, "title": bug.title, "severity": bug.severity})
+    return bugs, unconfirmed, len(baseline.signatures)
 
 
 def build_report(
@@ -22,61 +53,74 @@ def build_report(
     objective: str,
     result: AgentResult,
     browser: BrowserSession,
+    bugs: list[Bug],
+    unconfirmed: list[dict[str, Any]],
+    baseline_ignored: int,
     extra: dict[str, Any],
 ) -> dict[str, Any]:
-    steps = [s for s in result.steps]
-    counted = [s for s in steps if s.status != StepStatus.REPLANNED]
-    bugs = [_bug(s, steps, browser) for s in counted if s.status == StepStatus.FAILED]
+    counted = [s for s in result.steps if s.status != StepStatus.REPLANNED]
+    trace = browser.storage.relative(browser.storage.paths.trace) if browser.storage.paths.trace.exists() else None
     return {
         "session_id": session_id,
         "objective": objective,
         "target_url": browser.scope.target_url,
-        "outcome": result.outcome,
+        "outcome": outcome(result, bugs),
         "reason": result.reason,
         "summary": {
             "steps_planned": len(counted),
-            "steps_passed": sum(s.status == StepStatus.PASSED for s in counted),
-            "steps_failed": sum(s.status == StepStatus.FAILED for s in counted),
-            "steps_could_not_verify": sum(s.status == StepStatus.COULD_NOT_VERIFY for s in counted),
-            "steps_blocked": sum(s.status == StepStatus.BLOCKED for s in counted),
-            "steps_skipped": sum(s.status == StepStatus.SKIPPED for s in counted),
-            "replans": sum(s.status == StepStatus.REPLANNED for s in steps),
+            "steps_passed": _count(counted, StepStatus.PASSED),
+            "steps_failed": _count(counted, StepStatus.FAILED),
+            "steps_could_not_verify": _count(counted, StepStatus.COULD_NOT_VERIFY),
+            "steps_blocked": _count(counted, StepStatus.BLOCKED),
+            "steps_skipped": _count(counted, StepStatus.SKIPPED),
+            "replans": _count(result.steps, StepStatus.REPLANNED),
             "actions": len(result.actions),
-            "pages_visited": len({urlsplit(a.url_after).path for a in result.actions} |
-                                 {urlsplit(a.url_before).path for a in result.actions}),
+            "pages_visited": len({urlsplit(a.url_after).path for a in result.actions}),
             "bugs": len(bugs),
+            "unconfirmed_signals": len(unconfirmed),
+            "baseline_errors_ignored": baseline_ignored,
         },
-        "steps": [s.model_dump(mode="json") for s in steps],
-        "bugs": bugs,
+        "bugs": [_bug_json(b, trace) for b in bugs],
+        "unconfirmed": unconfirmed,
+        "could_not_verify": [{"step": s.sequence, "goal": s.goal, "reason": s.reason}
+                             for s in counted if s.status == StepStatus.COULD_NOT_VERIFY],
+        "not_tested": [{"step": s.sequence, "goal": s.goal, "status": s.status, "reason": s.reason}
+                       for s in counted if s.status in (StepStatus.SKIPPED, StepStatus.BLOCKED)],
+        "steps": [s.model_dump(mode="json") for s in result.steps],
+        "trace": trace,
         **extra,
     }
 
 
-def _bug(step: Step, steps: list[Step], browser: BrowserSession) -> dict[str, Any]:
-    failed = next((c for c in step.checks if not c.passed), None)
-    lo, hi = step.first_action or 0, step.last_action or 0
-    in_step = lambda e: lo <= e.action_seq <= hi  # noqa: E731
+def outcome(result: AgentResult, bugs: list[Bug]) -> str:
+    if result.outcome in ("CANCELLED", "FAILED") and not bugs:
+        return result.outcome
+    if bugs:
+        return "BUGS_FOUND"
+    # A step failed but no evidence survived detection: do not claim a bug.
+    return "COULD_NOT_VERIFY" if result.outcome == "BUGS_FOUND" else result.outcome
 
-    network = [
-        {"method": e.method, "url": e.url, "status": e.status, "failure": e.failure,
-         "response_body": e.response_body}
-        for e in browser.network.events
-        if in_step(e) and e.first_party and e.is_error and e.resource_type in ("fetch", "xhr", "document")
-    ]
-    # Console errors already present before this step are page noise, not evidence.
-    earlier = {e.text for e in browser.console.events if e.action_seq < lo}
-    console = [e.text for e in browser.console.events if in_step(e) and e.level == "error" and e.text not in earlier]
 
-    reproduce = [s.goal for s in steps if s.sequence < step.sequence and s.status == StepStatus.PASSED]
-    return {
-        "title": f"{step.goal}: {failed.criterion.describe() if failed else step.reason}",
-        "severity": "high" if failed and failed.app_error else "medium",
-        "category": "functional",
-        "summary": step.reason,
-        "expected": failed.criterion.describe() if failed else "",
-        "actual": failed.detail if failed else step.reason,
-        "url": step.end_url,
-        "step": step.sequence,
-        "steps_to_reproduce": [*reproduce, step.goal],
-        "evidence": {"network": network, "console": console, "screenshot": step.screenshot},
+def _reproduce(candidate: Candidate, steps: list[Step]) -> list[str]:
+    if candidate.step is None:
+        return [f"Open {candidate.url}"] + ([candidate.action] if candidate.action else [])
+    before = [s.goal for s in steps if s.sequence < candidate.step and s.status == StepStatus.PASSED]
+    last = candidate.step_goal or ""
+    if candidate.action:
+        last = f"{last} ({candidate.action})" if last else candidate.action
+    return [*before, last]
+
+
+def _bug_json(bug: Bug, trace: str | None) -> dict[str, Any]:
+    data = bug.model_dump(mode="json", exclude={"network", "console"})
+    data["evidence"] = {
+        "network": [n.model_dump(mode="json") for n in bug.network],
+        "console": bug.console,
+        "screenshots": [o.screenshot for o in bug.occurrences if o.screenshot],
+        "trace": trace,
     }
+    return data
+
+
+def _count(steps: list[Step], status: StepStatus) -> int:
+    return sum(s.status == status for s in steps)

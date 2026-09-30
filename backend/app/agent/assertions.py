@@ -62,7 +62,8 @@ def _element_present(c: Criterion, page: PageState, _) -> tuple[bool, str, bool]
     name = _norm(c.name or "")
     matches = [
         n for root in page.nodes for n in root.walk()
-        if n.role != "text" and (not c.role or n.role == c.role) and (not name or name in _norm(n.name))
+        if n.role != "text" and (not c.role or n.role == c.role)
+        and (not name or name in _norm(n.name) or name in " ".join(_texts([n])))  # alerts carry text, not a name
     ]
     what = f"{c.role or 'element'}" + (f" {c.name!r}" if c.name else "")
     return bool(matches), f"{len(matches)} {what} found", False

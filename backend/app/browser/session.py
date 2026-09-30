@@ -400,9 +400,21 @@ class BrowserSession:
             result.message = self._blocked_message(blocked[0])
             await self._return_to_scope()
         result.url_after = self.page.url
+        if self._caused_serious_error(result.sequence):
+            result.screenshot = await self.screenshot()
         result.duration_ms = int((time.monotonic() - started) * 1000)
         self.storage.append_jsonl(self.storage.paths.actions, result)
         return result
+
+    def _caused_serious_error(self, seq: int) -> bool:
+        """A first-party 5xx, network failure or uncaught exception during this action: worth a screenshot."""
+        if any(e.kind == "pageerror" for e in self.console.since(seq)):
+            return True
+        return any(
+            e.first_party and e.is_error and (e.status is None or e.status >= 500)
+            for e in self.network.since(seq)
+            if e.resource_type in ("fetch", "xhr", "document") and "BLOCKED_BY_CLIENT" not in (e.failure or "")
+        )
 
     async def _locate(self, ref: str, result: ActionResult) -> Locator:
         if self._last_observation is None:

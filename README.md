@@ -2,15 +2,15 @@
 
 A local AI agent that tests a website in a real, visible browser and writes a bug report you can trust.
 
-**Status: Phase 2 (local model + agent) done.** Next up is Phase 3, the bug engine.
+**Status: Phase 3 (bug engine) done.** Next up is Phase 4, FastAPI + SQLite.
 
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Seeded benchmark app, ground truth, evaluator | done |
 | 1 | BrowserSession, observation, domain scope, tracing | done |
 | 2 | Model provider, planner, executor, assertions | done |
-| 3 | Detectors, baseline, bug analyzer, dedup | next |
-| 4 | FastAPI + SQLite | |
+| 3 | Detectors, baseline, bug analyzer, dedup | done |
+| 4 | FastAPI + SQLite | next |
 | 5 | React UI | |
 | 6 | Tauri packaging | |
 
@@ -23,14 +23,26 @@ cd benchmark/seeded-app && npm install   # benchmark app
 
 ## Model setup (Ollama)
 
+The default is the Ollama **cloud** model `gemma4:cloud`, reached through the local Ollama server:
+
 ```bash
 ollama serve                 # if it is not already running
-ollama pull qwen3:4b         # the default model
+ollama signin                # once, connects this machine to your ollama.com account
 ```
 
-The model is configured in [ai-tester.toml](ai-tester.toml): provider, URL, model name, context window, thinking mode, timeouts, plus agent budgets and the safety policy. `[model.planner]` and `[model.executor]` can override any model setting per role, for example a larger model for planning. Set `AI_TESTER_CONFIG` to use another file.
+To run fully local instead, set `name = "qwen3:4b"` (after `ollama pull qwen3:4b`) and `observation_max_chars = 6000` in [ai-tester.toml](ai-tester.toml). To skip the local server, use `base_url = "https://ollama.com"`, the model name without `:cloud`, and an API key in `AI_TESTER_MODEL_API_KEY`.
 
-The Ollama provider uses Ollama's native `/api/chat`, not its OpenAI-compatible endpoint. Only the native API can set the context window per request, and Ollama's default of 4096 tokens silently truncates page observations. Any other OpenAI-compatible server (LM Studio, llama.cpp, vLLM, hosted) works with `provider = "openai_compatible"`.
+[ai-tester.toml](ai-tester.toml) configures:
+- the provider, URL, model name and context window
+- thinking (`false`, `true`, or `"low"`/`"medium"`/`"high"`)
+- timeouts, agent budgets and the safety policy
+
+`[model.planner]`, `[model.executor]` and `[model.analyzer]` can override any model setting per role. Set `AI_TESTER_CONFIG` to use another file.
+
+Implementation notes:
+- The Ollama provider uses the native `/api/chat`. It is the only Ollama API that can set the context window per request, and Ollama's default of 4096 tokens silently truncates page observations for local models.
+- Some cloud models ignore the API's JSON-schema parameter. So the schema is also stated in the prompt, and replies are unwrapped from code fences before validation.
+- Any OpenAI-compatible server (LM Studio, llama.cpp, vLLM, hosted APIs) works with `provider = "openai_compatible"`.
 
 ## Run a test
 
@@ -48,6 +60,17 @@ cd benchmark/seeded-app && npm run dev     # in another terminal
 uv run python -m benchmark.run             # all scenarios, scored against expected-results.yaml
 uv run python -m benchmark.run cart-total --repeat 3
 ```
+
+### Latest results
+
+The benchmark ran with `gemma4:cloud`, each scenario twice, in both app modes:
+
+| App mode | Runs | Outcome correct | Bugs found | False positives | Mean time per run |
+|---|---|---|---|---|---|
+| All 4 seeded bugs on | 12 | 12 / 12 | 8 / 8 | 0 | 18 s |
+| No bugs (`dev:clean`) | 12 | 11 / 12 | – | 0 | 17 s |
+
+The one miss ended as `COULD_NOT_VERIFY`, because a guessed check didn't match the page; it did not report a false bug. With the local `qwen3:4b` on an 8 GB Mac, runs took 1–5 minutes each, and the planner often wrote weak checks.
 
 ## Try the browser layer by hand
 
@@ -97,6 +120,48 @@ SEEDED_APP_URL=http://localhost:3000 uv run pytest         # also the seeded-app
 - **Unchecked steps.** Intermediate steps the planner couldn't write a usable check for complete on the executor's word, after at least one action, and the report marks them. The last step must always have code-evaluated checks.
 - **Recovery.** A step that stalls (the action limit, the same action repeated three times, or the page not changing) is replanned from the current page. Grounded checks are carried into the new plan. After a step that did not pass, the rest are `SKIPPED`.
 - **Session outcome:** `PASS`, `BUGS_FOUND`, `COULD_NOT_VERIFY`, `BLOCKED`, `FAILED` or `CANCELLED`, written to `report.json`. Every model call, with its prompt, response, latency and validation errors, goes to `model_calls.jsonl`.
+
+## Writing objectives that can find bugs
+
+A mismatch is reported as a bug only when the expectation is something you stated exactly. Everything else the agent assumes about the UI is a guess, and a failed guess is reported as *could not verify*, never as a bug. So be precise about what you expect:
+
+| Instead of | Write |
+|---|---|
+| "verify the user returns to the login page" | "... returns to the login page at /login" |
+| "verify an error is shown" | "... shows a validation error" (any `alert` counts) or quote the message: `"Enter a valid email"` |
+| "verify the customer is listed" | "... is listed" (the agent uses its generated test data, which counts as stated) |
+
+Quoted text, URL paths, e-mail addresses and the generated test data count as stated values. HTTP 5xx responses and uncaught JavaScript errors are reported whatever the objective says.
+
+## How bugs are found
+
+After the run, `app/detection` goes through everything recorded:
+
+1. **Detectors.**
+   - First-party HTTP errors: 5xx and failed requests are strong signals. Unexpected 404/405/410 are weak. 400, 401, 403, 409, 422 and 429 are treated as intended behaviour.
+   - Uncaught exceptions are strong; console errors are weak.
+   - Failed grounded checks are strong.
+   - Third-party requests and scripts are ignored.
+   - A 404 page the agent reached by typing a made-up URL is ignored.
+2. **Baseline.** Errors present when the target first loaded (for example a console error on every page load, or a 401 from a session check) are ignored, including when they recur later.
+3. **Incidents.** Signals from the same action are one candidate: a click that causes a 500, the app's console error about it, and the failed check.
+4. **Analysis** (`[model.analyzer]`).
+   - Strong candidates are always bugs: the model only writes the title, summary, expected, actual, severity and category.
+   - Weak candidates become bugs only if the model confirms them. Otherwise they appear under `unconfirmed` in the report.
+   - Without a model, strong candidates are described by rules.
+5. **Deduplication.** The same method, path pattern and status, or the same normalized error text, or the same check, becomes one bug with several occurrences.
+
+Evidence captured per bug:
+- the requests with status and response body
+- the app's console errors
+- a screenshot, taken automatically at the moment an action caused a 5xx, network failure or uncaught exception
+- `trace.zip`
+
+`report.json` also lists what could not be verified and what was not tested.
+
+## Hardware note (local models)
+
+On an 8 GB machine, `qwen3:4b` is the practical local limit. Ollama keeps a local model in memory for `keep_alive` (15 minutes by default), and with Chrome and an editor also running, memory runs short: browser launches stall. Run `ollama stop qwen3:4b` before running the test suite. Cloud models don't have this problem.
 
 ## How the browser layer works
 

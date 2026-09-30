@@ -28,6 +28,7 @@ The last step must have at least one criterion. Values are plain text, never pat
 TEST DATA is never used for logging in: put the login credentials from the OBJECTIVE into the login step's goal.
 - A check must be false before the step and true after it. For logging in, check that the URL \
 no longer contains "/login" (negate: true), not that it does.
+- When the OBJECTIVE quotes a text or names a URL path, use it exactly as the check value.
 - Prefer checks on data and URLs over guesses about button labels.
 - The last step must check exactly what the objective asks to verify.
 - Stay on the website under test.

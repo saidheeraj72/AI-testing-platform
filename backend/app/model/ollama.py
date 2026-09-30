@@ -1,8 +1,12 @@
-"""Ollama's native /api/chat.
+"""Ollama's native /api/chat, for local and cloud models.
 
 Used instead of Ollama's OpenAI-compatible endpoint because only the native
 API can set the context window (num_ctx) per request. The default of 4096
 tokens would silently truncate page observations.
+
+Cloud models (names ending in "-cloud" or ":cloud") run through the local
+`ollama serve` after `ollama signin`, or directly against https://ollama.com
+with an API key.
 """
 
 from __future__ import annotations
@@ -18,7 +22,10 @@ from app.model.provider import Completion, Message, ModelError, ModelProvider
 class OllamaProvider(ModelProvider):
     def __init__(self, settings: ModelSettings):
         super().__init__(settings)
-        self._client = httpx.AsyncClient(base_url=settings.base_url.rstrip("/"), timeout=settings.timeout_seconds)
+        headers = {"Authorization": f"Bearer {settings.api_key}"} if settings.api_key else {}
+        self._client = httpx.AsyncClient(
+            base_url=settings.base_url.rstrip("/"), timeout=settings.timeout_seconds, headers=headers
+        )
 
     async def complete(
         self, messages: list[Message], schema: dict[str, Any], *, temperature: float | None = None
@@ -40,6 +47,11 @@ class OllamaProvider(ModelProvider):
             raise ModelError(f"Ollama did not answer within {s.timeout_seconds:.0f}s") from None
         except httpx.HTTPError as e:
             raise ModelError(f"Cannot reach Ollama at {s.base_url} ({e}). Is `ollama serve` running?") from None
+        if response.status_code == 401:
+            raise ModelError(
+                "Ollama cloud model needs sign-in: run `ollama signin`, "
+                "or set AI_TESTER_MODEL_API_KEY with base_url = \"https://ollama.com\""
+            )
         if response.status_code == 404:
             raise ModelError(f"Ollama has no model {s.name!r}. Run: ollama pull {s.name}")
         if response.status_code >= 400:
