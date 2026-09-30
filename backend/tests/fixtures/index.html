@@ -1,0 +1,72 @@
+<!doctype html>
+<html>
+<head><title>Fixture home</title></head>
+<body>
+<nav aria-label="Main">
+  <a href="/page2">Page two</a>
+  <a href="/redirect-out">Leave site</a>
+</nav>
+<main>
+  <h1>Fixture home</h1>
+  <form id="form">
+    <label>Name <input id="name"></label>
+    <label>Password <input id="pw" type="password"></label>
+    <label>Country
+      <select id="country"><option>India</option><option>Japan</option><option value="fr">France</option></select>
+    </label>
+    <label><input id="agree" type="checkbox"> I agree</label>
+    <button type="submit">Submit form</button>
+  </form>
+  <p id="out" role="status"></p>
+
+  <button onclick="callFailing()">Call failing API</button>
+  <button onclick="fetch('/api/slow').then(() => say('Slow done'))">Call slow API</button>
+  <button onclick="setTimeout(() => { throw new Error('Kaboom from fixture') }, 0)">Throw error</button>
+  <button onclick="if (confirm('Delete everything?')) say('Deleted')">Delete everything</button>
+  <button onclick="window.open('/page2')">Open popup</button>
+
+  <div id="saver"><button onclick="say('Saved')">Save</button></div>
+  <button onclick="rerenderSave()">Rerender save</button>
+
+  <ul id="rows"></ul>
+  <button onclick="renderRows(['Gamma', 'Alpha', 'Beta'])">Rebuild rows</button>
+
+  <div id="host"></div>
+  <iframe title="Widget" srcdoc="<button onclick=&quot;document.body.insertAdjacentHTML('beforeend', '<p>Frame clicked</p>')&quot;>Frame button</button>"></iframe>
+</main>
+<script>
+  const out = document.getElementById('out');
+  function say(text) { out.textContent = text; }
+
+  document.getElementById('form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const field = (id) => document.getElementById(id);
+    say(`Submitted ${field('name').value} / ${field('country').value} / ${field('agree').checked}`);
+  });
+
+  function callFailing() {
+    fetch('/api/fail', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({token: 'abc123', query: 'x'}),
+    }).then((r) => say('Status ' + r.status));
+  }
+
+  function rerenderSave() {
+    const old = document.querySelector('#saver button');
+    old.replaceWith(old.cloneNode(true));
+  }
+
+  // Replaces every row node, like an unkeyed list re-render.
+  function renderRows(names) {
+    document.getElementById('rows').innerHTML = names
+      .map((n) => `<li><span>${n}</span> <button onclick="say('Edit ${n}')">Edit</button></li>`)
+      .join('');
+  }
+  renderRows(['Alpha', 'Beta']);
+
+  document.getElementById('host').attachShadow({mode: 'open'}).innerHTML =
+    `<button onclick="this.textContent = 'Shadow clicked'">Shadow button</button>`;
+</script>
+</body>
+</html>

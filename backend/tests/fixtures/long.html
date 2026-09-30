@@ -1,0 +1,11 @@
+<!doctype html>
+<html>
+<head><title>Long page</title></head>
+<body>
+<main><h1>Long page</h1><div id="list"></div></main>
+<script>
+  document.getElementById('list').innerHTML = Array.from({length: 200}, (_, i) =>
+    `<p>Paragraph ${i + 1} with some filler text to take up room.</p><button>Button ${i + 1}</button>`).join('');
+</script>
+</body>
+</html>
