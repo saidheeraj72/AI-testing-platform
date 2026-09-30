@@ -1,0 +1,35 @@
+# AI Tester configuration.
+# Another file can be used with AI_TESTER_CONFIG=/path/to/file.toml.
+
+[model]
+provider = "ollama"                  # ollama | openai_compatible
+base_url = "http://localhost:11434"  # openai_compatible: e.g. http://localhost:1234/v1
+name = "qwen3:4b"
+api_key = ""                         # openai_compatible only; env AI_TESTER_MODEL_API_KEY overrides
+temperature = 0.0
+context_window = 8192                # ollama num_ctx; the Ollama default (4096) is too small
+think = false                        # thinking mode: better reasoning, much slower
+timeout_seconds = 180
+max_output_tokens = 1024             # stops a model that never finishes its JSON
+max_repairs = 2                      # retries when the output fails schema validation
+keep_alive = "15m"                   # ollama: keep the model loaded between calls
+
+# Optional per-role overrides of any [model] key.
+[model.planner]
+[model.executor]
+
+[agent]
+max_plan_steps = 10
+max_actions_per_step = 10
+max_verify_failures = 2              # failed "verify" attempts before a step fails
+max_replans = 2
+max_model_calls = 80
+max_duration_seconds = 900
+observation_max_chars = 6000         # page outline size sent to the model
+
+[browser]
+headless = false
+channel = "chrome"                   # "chrome" (installed) or "chromium" (bundled)
+
+[safety]
+risky_actions = "confirm"            # confirm | allow | block (delete, pay, place order, send, ...)

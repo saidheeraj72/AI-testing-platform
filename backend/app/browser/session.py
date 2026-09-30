@@ -35,7 +35,7 @@ from app.browser.elements import ResolutionError, resolve
 from app.browser.network import NetworkRecorder
 from app.browser.observation import ObservationLimits, build_observation
 from app.browser.profile import ProfileLock
-from app.browser.snapshot import parse_snapshot
+from app.browser.snapshot import Node, parse_snapshot
 from app.safety.domain_scope import DomainScope
 from app.safety.secrets import REDACTED, is_secret_field, mask_snapshot
 from app.schemas.action import ActionError, ActionResult, Target
@@ -100,6 +100,7 @@ class BrowserSession:
         self._observation_seq = 0
         self._screenshot_seq = 0
         self._last_observation: Observation | None = None
+        self.last_nodes: list[Node] = []  # parsed snapshot behind the latest observation
         self._elements_by_ref: dict[str, Element] = {}
         self._notices: list[str] = []
 
@@ -225,7 +226,7 @@ class BrowserSession:
             await self._return_to_scope()
         self._observation_seq += 1
         notices, self._notices = self._notices, []
-        observation, raw = await self._snapshot(self._observation_seq, notices)
+        observation, raw, self.last_nodes = await self._snapshot(self._observation_seq, notices)
         if screenshot:
             observation.screenshot_path = await self.screenshot()
         self._last_observation = observation
@@ -243,7 +244,11 @@ class BrowserSession:
         await self.page.screenshot(path=str(path), full_page=full_page)
         return self.storage.relative(path)
 
-    async def _snapshot(self, sequence: int, notices: list[str]) -> tuple[Observation, str]:
+    @property
+    def action_count(self) -> int:
+        return self._action_seq
+
+    async def _snapshot(self, sequence: int, notices: list[str]) -> tuple[Observation, str, list[Node]]:
         page = self.page
         last_error: Exception | None = None
         for _ in range(3):
@@ -253,8 +258,9 @@ class BrowserSession:
                     "() => ({w: innerWidth, h: innerHeight, y: Math.round(scrollY),"
                     " ph: document.documentElement.scrollHeight})"
                 )
+                nodes = parse_snapshot(raw)
                 observation = build_observation(
-                    parse_snapshot(raw),
+                    nodes,
                     sequence=sequence,
                     url=page.url,
                     title=await page.title(),
@@ -263,7 +269,7 @@ class BrowserSession:
                     limits=self.config.limits,
                     notices=notices,
                 )
-                return observation, raw
+                return observation, raw, nodes
             except PlaywrightError as e:  # usually "execution context destroyed" mid-navigation
                 last_error = e
                 try:
@@ -406,7 +412,7 @@ class BrowserSession:
             raise _Failure(ActionError.UNKNOWN_REF, f"{ref} is not in the latest observation.")
         result.target = Target(role=target.role, name=target.name)
 
-        fresh, _ = await self._snapshot(self._observation_seq, [])
+        fresh, _, _ = await self._snapshot(self._observation_seq, [])
         resolution = resolve(target, self._last_observation.elements, fresh.elements)
         result.resolved_ref = resolution.ref
         return self.page.locator(f"aria-ref={resolution.ref}")

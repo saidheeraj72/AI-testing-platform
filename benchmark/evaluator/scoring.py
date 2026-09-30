@@ -5,7 +5,7 @@ Session folder contract (fields the evaluator reads; everything else is ignored)
   report.json
     outcome: PASS | BUGS_FOUND | COULD_NOT_VERIFY | BLOCKED | FAILED | CANCELLED
     steps:   [{status: PASSED | FAILED | COULD_NOT_VERIFY | SKIPPED | BLOCKED, ...}]
-    bugs:    [{title, summary?, expected?, actual?, url?,
+    bugs:    [{title, summary?, expected?, actual?, url?, steps_to_reproduce?: [str],
                evidence?: {network?: [{method, url, status}], console?: [str]}}]
 
   manifest.json (optional)
@@ -156,6 +156,7 @@ def _matches(bug: dict[str, Any], rule: MatchRule) -> bool:
     if rule.keywords_any:
         text = " ".join(
             [str(bug.get(k) or "") for k in ("title", "summary", "expected", "actual")]
+            + [str(s) for s in bug.get("steps_to_reproduce") or []]
             + console
             + [f"{n.get('method', '')} {n.get('url', '')} {n.get('status', '')}" for n in network]
         ).lower()

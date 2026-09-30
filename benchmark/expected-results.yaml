@@ -8,7 +8,8 @@
 #                  method / url_contains / status
 #   url_contains:  the reported bug's page URL contains this
 #   keywords_any:  one of these appears (case-insensitive) in the bug's title,
-#                  summary, expected, actual, console evidence or network URLs
+#                  summary, expected, actual, steps_to_reproduce, console
+#                  evidence or network URLs
 
 version: 1
 

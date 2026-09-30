@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Local AI agent that tests websites in a real browser and reports bugs"
 requires-python = ">=3.12"
 dependencies = [
+    "httpx>=0.28.1",
     "playwright>=1.63",
     "pydantic>=2.8",
     "pyyaml>=6",

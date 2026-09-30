@@ -51,7 +51,10 @@ class NetworkEvent:
 
     @property
     def is_error(self) -> bool:
-        return self.failure is not None or (self.status is not None and self.status >= 400)
+        if self.status is not None:
+            return self.status >= 400
+        # Chrome also reports ERR_ABORTED for cancelled requests (navigation away, AbortController).
+        return self.failure is not None and "ERR_ABORTED" not in self.failure
 
 
 class NetworkRecorder:
@@ -121,7 +124,9 @@ class NetworkRecorder:
         try:
             event.duration_ms = int((time.time() - event.started_at) * 1000)
             event.failure = failure
-            response = await request.response() if failure is None else None
+            # Chrome reports some completed requests as failed (e.g. a 204 fetch as ERR_ABORTED),
+            # so look for a response either way.
+            response = await request.response()
             if response is not None:
                 event.status = response.status
                 event.status_text = response.status_text
