@@ -96,3 +96,42 @@ def test_single_sign_on_pages_are_reachable_but_handed_to_a_person():
     assert not scope.allows_navigation("https://evil.example.org/")
     found = detect_blocker([], "Log in with a@b.c / password1", idp)
     assert found and found.kind == "login_required" and "login.microsoftonline.com" in found.message
+
+
+# A form whose labels are sibling divs, not <label>s, with a custom dropdown and a disabled submit button.
+PROPOSAL_DIALOG = """\
+- dialog [ref=e314] [box=955,0,520,835]:
+  - heading "Create New Proposal" [level=2] [ref=e316]
+  - generic [ref=e318]:
+    - generic [ref=e319]:
+      - generic [ref=e320]: Name *
+      - textbox "e.g. Workforce Strategy Review" [ref=e321]
+    - generic [ref=e322]:
+      - generic [ref=e323]: Client *
+      - combobox [ref=e324] [cursor=pointer]:
+        - generic [ref=e325]: Select or create a client
+    - generic [ref=e326]:
+      - generic [ref=e327]: RFQ / Tender ID
+      - textbox "e.g. RFQ-2026-001" [ref=e328]
+  - button "Create Proposal" [disabled]
+  - button "Close" [ref=e331] [cursor=pointer]
+"""
+
+
+def test_fields_are_named_by_their_labels_and_required_fields_are_marked():
+    o, nodes = observe(PROPOSAL_DIALOG)
+    assert '[e321] textbox "Name" (required) placeholder "e.g. Workforce Strategy Review"' in o.text
+    assert '[e324] combobox "Client" (required) = "Select or create a client"' in o.text
+    assert '[e328] textbox "RFQ / Tender ID" placeholder' in o.text
+    assert "text: Client *" not in o.text  # the label is on the field now, not repeated
+    # Checks find fields by their label too.
+    from app.agent.assertions import PageState, evaluate
+    from app.schemas.plan import Criterion
+    result = evaluate(Criterion(type="field_value", name="Client", value="Acme"), PageState("x", nodes, []))
+    assert "no field named" not in result.detail
+
+
+def test_a_disabled_button_without_a_ref_is_still_shown():
+    o, _ = observe(PROPOSAL_DIALOG)
+    assert 'button "Create Proposal" (disabled' in o.text
+    assert all(e.name != "Create Proposal" for e in o.elements)  # not actionable

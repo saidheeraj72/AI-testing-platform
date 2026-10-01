@@ -76,7 +76,8 @@ def _element_present(c: Criterion, page: PageState, _) -> tuple[bool, str, bool]
 
 def _field_value(c: Criterion, page: PageState, _) -> tuple[bool, str, bool]:
     name = _norm(c.name or "")
-    fields = [n for root in page.nodes for n in root.walk() if n.role in EDITABLE_ROLES and name in _norm(n.name)]
+    fields = [n for root in page.nodes for n in root.walk() if n.role in EDITABLE_ROLES
+              and (name in _norm(n.name) or name in _norm(str(n.attrs.get("label") or "")))]
     if not fields:
         return False, f"{NO_FIELD} {c.name!r}", False
     value = fields[0].text or ""

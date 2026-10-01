@@ -89,10 +89,22 @@ async def test_step_passes_on_automatic_check_without_verify(site, tmp_path):
     result, provider, _ = await run_agent(site, tmp_path, [
         plan(("Submit the form with name John", [{"type": "text_visible", "value": "Submitted John"}])),
         act("type", 'textbox "Name"', text="John", submit=True),
-    ])
+    ], objective='Submit John and check "Submitted John" is shown')
     assert result.outcome == "PASS"
     assert result.steps[0].status == StepStatus.PASSED
     assert len(provider.prompts) == 2  # plan + one action; the check ran without asking the model
+
+
+async def test_a_guessed_text_check_needs_the_agent_to_say_it_is_done(site, tmp_path):
+    # "Page two" is a guess, and such texts often show up before the work is done
+    # (a product list shows the product before it is added to the cart).
+    result, provider, _ = await run_agent(site, tmp_path, [
+        plan(("Open page two", [{"type": "text_visible", "value": "Home"}])),
+        act("click", 'link "Page two"'),
+        act("verify"),
+    ])
+    assert result.steps[0].status == StepStatus.PASSED
+    assert len(provider.prompts) == 3  # plan, click, explicit verify
 
 
 async def test_app_error_fails_the_step_with_evidence(site, tmp_path):
@@ -139,7 +151,7 @@ async def test_unchecked_step_needs_an_action_then_verify(site, tmp_path):
         act("type", 'textbox "Name"', text="Ada"),
         act("verify"),
         act("click", 'button "Submit form"'),
-    ])
+    ], objective='Type Ada, submit, and check "Submitted Ada" is shown')
     assert [s.status for s in result.steps] == [StepStatus.PASSED, StepStatus.PASSED]
     assert "no automatic check" in result.steps[0].reason
 

@@ -11,9 +11,9 @@ name = "gemma4:cloud"                # local option on 8 GB RAM: "qwen3:4b" (wit
 api_key = ""                         # env AI_TESTER_MODEL_API_KEY overrides
 temperature = 0.0
 context_window = 32768               # ollama num_ctx; the Ollama default (4096) is too small (16384 for 8 GB RAM)
-think = false                        # false | true | "low" | "medium" | "high" (levels: gpt-oss)
+think = true                         # false | true | "low" | "medium" | "high" (levels: gpt-oss)
 timeout_seconds = 180
-max_output_tokens = 1024             # stops a model that never finishes its JSON
+max_output_tokens = 4096             # stops a model that never finishes its JSON (thinking counts too)
 max_repairs = 2                      # retries when the output fails schema validation
 keep_alive = "15m"                   # ollama: keep the model loaded between calls
 

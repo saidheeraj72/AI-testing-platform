@@ -197,6 +197,9 @@ class TestAgent:
         verify_failures = 0
         checked = bool(step.criteria)
         needs_args = any(needs_verify_args(c) for c in step.criteria)
+        # A guessed visible text ("Wireless Mouse") often appears before the work is done (the product list
+        # shows it); such checks only count when the executor says the step is done.
+        auto = checked and not needs_args and not all(_weak(c) for c in step.criteria)
         already_true: bool | None = None  # were all checks true before this step did anything?
         self._turns = []
         self._want_screenshot = cfg.vision != "off"  # every step starts by looking
@@ -216,13 +219,13 @@ class TestAgent:
             previous, after_action = observation.fingerprint, False
 
             # Checks run after every action, so the model needn't spend a call to say "done".
-            # Checks that were already true before the step started prove nothing on their own;
-            # then only an explicit "verify" from the executor can complete the step.
-            if checked and not needs_args and already_true is None:
+            # Checks that were already true before the step started prove nothing on their own,
+            # and neither do guessed texts; then only an explicit "verify" completes the step.
+            if auto and already_true is None:
                 already_true = _passes(self._check(step))
             if checked and acted:
                 results = self._check(step)
-                if not needs_args and not already_true and _passes(results):
+                if auto and not already_true and _passes(results):
                     self._end(step, StepStatus.PASSED, results, "all checks passed")
                 if errors := [r for r in results if r.app_error]:
                     self._end(step, StepStatus.FAILED, results, errors[0].detail)
@@ -518,6 +521,11 @@ class TestAgent:
                        "steps": [s.model_dump(mode="json") for s in new_steps]})
             self._end(step, StepStatus.REPLANNED, results, reason)
         self._end(step, StepStatus.COULD_NOT_VERIFY, results, reason)
+
+
+def _weak(c) -> bool:
+    """A guess about what the page shows, as opposed to a URL, a request, a field value or a stated text."""
+    return c.type in ("text_visible", "element_present") and not c.grounded and not c.negate
 
 
 def _missing_field(r: CheckResult) -> bool:

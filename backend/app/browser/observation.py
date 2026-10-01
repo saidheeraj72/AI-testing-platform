@@ -33,6 +33,9 @@ ALWAYS_KEEP_ROLES = frozenset({
 })
 LIVE_ROLES = frozenset({"alert", "status"})
 TRANSPARENT_ROLES = frozenset({"generic", "none", "presentation", "rowgroup"})
+FIELD_ROLES = frozenset({"textbox", "searchbox", "combobox", "spinbutton", "listbox", "slider"})
+LABEL_ROLES = frozenset({"generic", "text", "paragraph", "LabelText", "label", "strong"})
+MAX_FIELD_LABEL = 60
 STATE_ATTRS = ("disabled", "checked", "selected", "expanded", "pressed", "active", "required", "readonly")
 
 _REF_TOKEN = re.compile(r"\[(?:f\d+)?e\d+\] ")
@@ -77,6 +80,7 @@ def build_observation(
     notices: list[str] | None = None,
 ) -> Observation:
     walk = _Walk(viewport=viewport)
+    _label_fields(nodes)
     for node in nodes:
         _visit(node, walk, indent=0, context=[], frame="main", offset=(0.0, 0.0), parent_distance=0.0,
                parent_clickable=False, in_dialog=False, sibling_names=frozenset())
@@ -119,7 +123,7 @@ def _visit(
 
     def children(extra_indent: int, ctx: list[str], child_frame: str = frame, child_offset=offset) -> None:
         # Visible labels usually repeat the name of the control next to them.
-        names = frozenset(c.name for c in node.children if c.ref and c.name)
+        names = frozenset(n for c in node.children if c.ref for n in (c.name, c.attrs.get("label")) if n)
         for child in node.children:
             _visit(child, walk, indent=indent + extra_indent, context=ctx, frame=child_frame,
                    offset=child_offset, parent_distance=distance,
@@ -146,6 +150,11 @@ def _visit(
             children(1, context + [f'{role} "{element.name}"' if element.name else role])
         return
 
+    if node.ref is None and role in INTERACTIVE_ROLES and node.attrs.get("disabled") and (node.name or node.text):
+        # Playwright gives disabled controls no ref. The model must still see them: a disabled
+        # "Create" button means a required field is missing.
+        emit(f'{role} "{_clip(node.name or node.text or "", MAX_LABEL)}" (disabled, fill the required fields first)')
+        return
     if role == "text":
         if node.text and node.text.strip() not in sibling_names:
             emit(f"text: {node.text}")
@@ -177,7 +186,7 @@ def _visit(
             emit(f'img "{node.name}"')
         return
     if role in TRANSPARENT_ROLES or not (node.name or node.text):
-        if node.text and not node.children:
+        if node.text and not node.children and node.text.strip() not in sibling_names:
             emit(f"text: {node.text}")
         children(0, context)
         return
@@ -195,6 +204,11 @@ def _fingerprint(text: str) -> str:
 def _element(node: Node, box: Box | None, distance: float, context: list[str], frame: str,
              name: str | None = None) -> Element:
     states = [a for a in STATE_ATTRS if node.attrs.get(a) is True or node.attrs.get(a) == "true"]
+    label = node.attrs.get("label")
+    if isinstance(label, str) and label:
+        if label.rstrip().endswith("*") and "required" not in states:
+            states.append("required")
+        name = label.rstrip(" *:")
     options = [c.name for c in node.children if c.role == "option"]
     value = node.text
     if value and is_secret_field(node.name):
@@ -202,6 +216,8 @@ def _element(node: Node, box: Box | None, distance: float, context: list[str], f
     if node.role == "combobox" and options:
         selected = [c.name for c in node.children if c.role == "option" and c.attrs.get("selected")]
         value = selected[0] if selected else value
+    elif node.role == "combobox" and not value and node.children:
+        value = _text_of(node)  # a custom dropdown shows its choice (or "Select a client") as text
     return Element(
         ref=node.ref or "",
         role=node.role,
@@ -226,6 +242,8 @@ def _element_line(element: Element, node: Node) -> str:
         parts.append("(" + ", ".join("focused" if s == "active" else s for s in element.states) + ")")
     if element.value is not None and element.value != "":
         parts.append(f'= "{_clip(element.value, MAX_TEXT_LINE)}"')
+    if node.attrs.get("label") and node.name and node.name != element.name:
+        parts.append(f'placeholder "{_clip(node.name, MAX_LABEL)}"')
     if element.options:
         parts.append("options: " + ", ".join(element.options[:20]) + (" …" if len(element.options) > 20 else ""))
     if element.url:
@@ -264,6 +282,38 @@ def _render(lines: list[_Line], limits: ObservationLimits) -> tuple[str, int]:
     if omitted_run:
         out.append(f"… {omitted_run} more lines (scroll to see them)")
     return "\n".join(out), omitted_total
+
+
+def _label_fields(nodes: list[Node]) -> None:
+    """Name fields after the label next to them.
+
+    Many forms put the label in a sibling element rather than a <label>:
+    <div>Client *</div><button role="combobox">Select a client</button>. The
+    accessibility name is then empty or the placeholder ("e.g. Workforce
+    Strategy Review"). The label is stored on the node, so checks that look
+    fields up by name find it too.
+    """
+    for root in nodes:
+        for node in root.walk():
+            for before, field_node in zip(node.children, node.children[1:]):
+                if field_node.role in FIELD_ROLES and "label" not in field_node.attrs:
+                    text = _plain_text(before)
+                    if text and _norm_label(text) != _norm_label(field_node.name):
+                        field_node.attrs["label"] = text
+
+
+def _plain_text(node: Node) -> str:
+    """The text of a label-like node: no controls inside, short."""
+    if node.role not in LABEL_ROLES or node.ref and node.attrs.get("cursor") == "pointer":
+        return ""
+    if any(n.role in INTERACTIVE_ROLES for n in node.walk()):
+        return ""
+    text = " ".join(t for n in node.walk() for t in (n.text, n.name if n.role == "text" else None) if t).strip()
+    return text if 0 < len(text) <= MAX_FIELD_LABEL else ""
+
+
+def _norm_label(text: str) -> str:
+    return " ".join(text.split()).rstrip(" *:").casefold()
 
 
 def _label(node: Node) -> str:

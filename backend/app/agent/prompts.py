@@ -86,6 +86,8 @@ How to work:
 - Prefer refs. Use only refs that appear in PAGE or in a tool result. Never invent a ref.
 - If what you need is not in PAGE, use find or read_page before clicking something else.
 - If an action did nothing ("nothing on the page changed"), do not repeat it: try a different element.
+- Fill every field marked "required" before submitting a form. A disabled button means a required field is \
+still empty; dropdowns (combobox) need a click and then a choice from the options that appear.
 - To create new records, use the TEST DATA values exactly. To log in, use the credentials in the OBJECTIVE, \
 never TEST DATA.
 - Use the application's own links and buttons. Do not work around a problem by typing URLs; the test must \

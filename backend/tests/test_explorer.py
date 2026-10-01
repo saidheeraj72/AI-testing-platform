@@ -22,6 +22,7 @@ async def test_explore_crawls_finds_errors_and_runs_workflows(site, tmp_path):
         {"workflows": [{"title": "Submit the form", "objective": "Submit the form with the name Ada"}]},
         plan(("Submit the form with name Ada", [{"type": "text_visible", "value": "Submitted Ada"}])),
         act("type", 'textbox "Name"', text="Ada", submit=True),
+        act("verify"),  # the workflow's text check is the model's guess: the agent has to say it is done
         ANALYSIS, ANALYSIS,  # one per bug candidate
     ]
     provider = ScriptedProvider(settings.model.executor, script)
