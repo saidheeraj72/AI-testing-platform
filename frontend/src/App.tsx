@@ -1,5 +1,5 @@
 import { NavLink, Route, Routes, useLocation } from "react-router";
-import { API_URL, hasToken } from "./api/client";
+import { API_URL, hasToken, inDesktopApp } from "./api/client";
 import { useSystemInfo } from "./api/hooks";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import BugPage from "./pages/BugPage";
@@ -27,7 +27,9 @@ export default function App() {
           <div className="error-box" role="alert" style={{ marginBottom: "1rem" }}>
             {!hasToken
               ? "No API token configured. Start the app with: uv run python scripts/dev.py"
-              : `${system.error?.message} Start it with: uv run python scripts/dev.py`}
+              : inDesktopApp()
+                ? `${system.error?.message} The AI Tester engine stopped; restart the app.`
+                : `${system.error?.message} Start it with: uv run python scripts/dev.py`}
             <div className="small">API: {API_URL}</div>
           </div>
         )}

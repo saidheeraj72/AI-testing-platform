@@ -2,7 +2,7 @@
 
 A local AI agent that tests a website in a real, visible browser and writes a bug report you can trust.
 
-**Status: Phases 0–6, 8 and 9 done.** Next: desktop packaging (7).
+**Status: all phases (0–9) done.**
 
 | Phase | Scope | Status |
 |---|---|---|
@@ -13,7 +13,7 @@ A local AI agent that tests a website in a real, visible browser and writes a bu
 | 4 | FastAPI + SQLite | done |
 | 5 | React UI | done |
 | 6 | Human takeover and auth polish | done |
-| 7 | Tauri packaging | |
+| 7 | Tauri packaging | done |
 | 8 | Chrome extension | done |
 | 9 | Autonomous exploration | done |
 
@@ -42,6 +42,23 @@ uv run python scripts/dev.py         # API + UI; open http://127.0.0.1:5173
     - A banner appears when the agent wants to do something risky (delete, pay, place an order…): **Allow once** or **Refuse**.
   - When finished: the summary, the bugs, what could not be verified or was not tested, the plan with its check results, the timeline, and the evidence files (including the Playwright trace).
 - **Bug**: expected and actual, steps to reproduce, screenshots, the failing requests with response bodies, console errors, and occurrences.
+
+## Desktop app
+
+```bash
+uv run python scripts/build_desktop.py      # needs Node.js and Rust (https://rustup.rs)
+open "desktop/src-tauri/target/release/bundle/macos/AI Tester.app"
+```
+
+The build produces `AI Tester.app` and a `.dmg`. It's a Tauri window around the same React UI, with the Python engine frozen by PyInstaller ([desktop/sidecar.spec](desktop/sidecar.spec)) and shipped inside the app. When the app opens, it:
+
+- picks a free local port and a new token;
+- starts the engine with them, and stops it on quit (gracefully, so a running test saves its trace and report);
+- hands the address and token to the UI, which never sees them in a URL.
+
+Settings, the database, sessions and browser profiles live in `~/Library/Application Support/dev.aitester.desktop/`. Edit `ai-tester.toml` there to change the model; the engine's log is `engine.log` in the same folder. The app uses your installed Google Chrome, and the model comes from Ollama as before (`ollama signin` for cloud models).
+
+The app isn't code-signed. The first time, right-click it and choose **Open**.
 
 ## Model setup (Ollama)
 

@@ -1,0 +1,49 @@
+# AI Tester configuration.
+# Another file can be used with AI_TESTER_CONFIG=/path/to/file.toml.
+
+[model]
+provider = "ollama"                  # ollama | openai_compatible
+# Ollama cloud through the local server: run `ollama signin` once.
+# Direct cloud instead: base_url = "https://ollama.com", name without "-cloud",
+# and AI_TESTER_MODEL_API_KEY set to an ollama.com API key.
+base_url = "http://localhost:11434"  # openai_compatible: e.g. http://localhost:1234/v1
+name = "gemma4:cloud"                # local option on 8 GB RAM: "qwen3:4b" (with think = false)
+api_key = ""                         # env AI_TESTER_MODEL_API_KEY overrides
+temperature = 0.0
+context_window = 8192                # ollama num_ctx for local models; the Ollama default (4096) is too small
+think = false                        # false | true | "low" | "medium" | "high" (levels: gpt-oss)
+timeout_seconds = 180
+max_output_tokens = 1024             # stops a model that never finishes its JSON
+max_repairs = 2                      # retries when the output fails schema validation
+keep_alive = "15m"                   # ollama: keep the model loaded between calls
+
+# Optional per-role overrides of any [model] key.
+[model.planner]
+[model.executor]
+[model.analyzer]
+
+[agent]
+max_plan_steps = 10
+max_actions_per_step = 10
+max_verify_failures = 2              # failed "verify" attempts before a step fails
+max_replans = 2
+max_model_calls = 80
+max_duration_seconds = 900
+observation_max_chars = 12000        # page outline size sent to the model (6000 for small local models)
+max_analyzer_calls = 12              # bug analysis after the run; 0 = describe bugs by rules only
+explore_max_pages = 15               # exploration mode: pages crawled by following links
+explore_workflows = 3                # exploration mode: workflows proposed and tested
+
+[browser]
+headless = false
+channel = "chrome"                   # "chrome" (installed) or "chromium" (bundled)
+
+[safety]
+risky_actions = "confirm"            # confirm | allow | block (delete, pay, place order, send, ...)
+
+[server]
+host = "127.0.0.1"                   # loopback only; the API drives a logged-in browser
+port = 8765
+allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173", "tauri://localhost", "http://tauri.localhost"]
+max_concurrent_sessions = 1
+allow_extension = true               # the Chrome extension may call the API (it still needs the token)

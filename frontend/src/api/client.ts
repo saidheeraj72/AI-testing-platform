@@ -1,10 +1,32 @@
 // The API only accepts requests carrying the startup token (see backend/app/api/security.py).
-export const API_URL: string = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8765";
-const TOKEN: string = import.meta.env.VITE_API_TOKEN ?? "";
+// In development scripts/dev.py provides it through Vite env; in the desktop app the Tauri shell does.
+export let API_URL: string = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8765";
+let TOKEN: string = import.meta.env.VITE_API_TOKEN ?? "";
 
-export const hasToken = TOKEN !== "";
+export let hasToken = TOKEN !== "";
 /** For pairing the Chrome extension, which needs the same token. */
 export const apiToken = () => TOKEN;
+
+export const inDesktopApp = () => "__TAURI_INTERNALS__" in window;
+
+/** Desktop app: get the engine's address and token from the shell, then wait until it answers. */
+export async function initDesktopConfig(onWaiting: (seconds: number) => void): Promise<void> {
+  if (!inDesktopApp()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  const config = await invoke<{ url: string; token: string }>("api_config");
+  API_URL = config.url;
+  TOKEN = config.token;
+  hasToken = TOKEN !== "";
+  for (let i = 0; i < 120; i++) {
+    try {
+      if ((await fetch(`${API_URL}/api/system/ping`)).ok) return;
+    } catch {
+      // engine still starting
+    }
+    onWaiting(i / 2);
+    await new Promise((r) => setTimeout(r, 500));
+  }
+}
 
 export class ApiError extends Error {
   constructor(

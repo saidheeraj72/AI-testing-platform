@@ -14,7 +14,7 @@ import sys
 import uvicorn
 
 from app.api.security import new_token, write_token_file
-from app.config import ConfigError, data_dir, load_settings
+from app.config import ConfigError, data_dir, ensure_user_config, load_settings
 from app.main import create_app
 
 
@@ -27,6 +27,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="python -m app", description=__doc__)
     parser.add_argument("--port", type=int, help="override [server] port")
     args = parser.parse_args()
+    if getattr(sys, "frozen", False) and "AI_TESTER_CONFIG" not in os.environ:
+        # Packaged app: settings live next to the user's data, created on first run.
+        os.environ["AI_TESTER_CONFIG"] = str(ensure_user_config(data_dir() / "ai-tester.toml"))
     try:
         settings = load_settings()
     except ConfigError as e:
@@ -46,6 +49,7 @@ def main() -> int:
     write_token_file(token_file, token)
     print(f"AI Tester API on http://{host}:{port}\nToken written to {token_file}")
 
+    # The app object, not an import string: works the same when frozen by PyInstaller.
     uvicorn.run(create_app(settings, token=token), host=host, port=port, log_level="info")
     return 0
 

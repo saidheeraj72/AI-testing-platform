@@ -14,3 +14,10 @@ frontend/dist/
 
 .env
 .DS_Store
+
+# Desktop build outputs
+build/
+dist-sidecar/
+desktop/node_modules/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/

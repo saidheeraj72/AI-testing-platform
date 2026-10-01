@@ -86,6 +86,17 @@ class Settings(_Strict):
     server: ServerSettings = ServerSettings()
 
 
+PACKAGED_DEFAULT_CONFIG = Path(__file__).parent / "default-config.toml"
+
+
+def ensure_user_config(path: Path) -> Path:
+    """Packaged app: the first run copies the default settings to the user's data folder."""
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(PACKAGED_DEFAULT_CONFIG.read_text())
+    return path
+
+
 def load_settings(path: Path | None = None) -> Settings:
     path = Path(path or os.environ.get("AI_TESTER_CONFIG") or DEFAULT_CONFIG_PATH)
     try:

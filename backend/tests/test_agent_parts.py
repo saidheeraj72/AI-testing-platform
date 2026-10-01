@@ -73,3 +73,18 @@ def test_extract_json_from_fenced_or_wrapped_replies():
     assert extract_json('{"a": 1}') == '{"a": 1}'
     assert extract_json('```json\n{"a": 1}\n```') == '{"a": 1}'
     assert extract_json('Here you go: {"a": {"b": 2}} done') == '{"a": {"b": 2}}'
+
+
+
+def test_packaged_default_config_matches_the_repo_config():
+    from app.config import DEFAULT_CONFIG_PATH, PACKAGED_DEFAULT_CONFIG
+
+    assert PACKAGED_DEFAULT_CONFIG.read_text() == DEFAULT_CONFIG_PATH.read_text(), \
+        "copy ai-tester.toml to backend/app/default-config.toml"
+
+
+def test_first_run_copies_default_config(tmp_path):
+    from app.config import ensure_user_config, load_settings
+
+    path = ensure_user_config(tmp_path / "data" / "ai-tester.toml")
+    assert path.exists() and load_settings(path).server.port == 8765
