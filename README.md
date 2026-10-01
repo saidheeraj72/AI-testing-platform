@@ -58,7 +58,7 @@ The build produces `AI Tester.app` and a `.dmg`. It's a Tauri window around the 
 
 Settings, the database, sessions and browser profiles live in `~/Library/Application Support/dev.aitester.desktop/`. Edit `ai-tester.toml` there to change the model; the engine's log is `engine.log` in the same folder. The app uses your installed Google Chrome, and the model comes from Ollama as before (`ollama signin` for cloud models).
 
-The app isn't code-signed. The first time, right-click it and choose **Open**.
+To install it, drag `AI Tester.app` (or open the `.dmg` and drag it) into **Applications**, then open it from Launchpad or Spotlight. The app is signed ad hoc, not with an Apple developer certificate, so the first time macOS may ask you to right-click it, choose **Open**, and confirm.
 
 ## Model setup (Ollama)
 

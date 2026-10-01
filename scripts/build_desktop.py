@@ -41,6 +41,11 @@ def main() -> int:
 
     bundle = ROOT / "desktop" / "src-tauri" / "target" / "release" / "bundle"
     if sys.platform == "darwin":
+        # Without a developer certificate the bundle only carries the linker's ad-hoc signature, which
+        # does not cover the bundled engine; macOS then refuses to open it. Sign the whole bundle ad hoc.
+        app = bundle / "macos" / "AI Tester.app"
+        run(["codesign", "--force", "--deep", "--sign", "-", str(app)], ROOT, env)
+        run(["codesign", "--verify", "--deep", "--strict", str(app)], ROOT, env)
         # A plain compressed disk image. (Tauri's styled DMG drives Finder by AppleScript, which
         # fails in non-interactive builds.)
         dmg = bundle / "dmg" / "AI Tester.dmg"
