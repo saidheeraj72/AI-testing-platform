@@ -53,6 +53,9 @@ class AgentSettings(_Strict):
     max_model_calls: int = Field(80, ge=1)
     max_duration_seconds: float = Field(900, gt=0)
     observation_max_chars: int = Field(6000, ge=1000)
+    # Screenshots for the model (it needs a vision model): "always" with every decision,
+    # "on_request" at the start of each step and when the model asks, "off" never.
+    vision: Literal["always", "on_request", "off"] = "always"
     max_analyzer_calls: int = Field(12, ge=0)  # separate from max_model_calls; 0 disables AI analysis
     explore_max_pages: int = Field(15, ge=1)    # exploration: pages crawled by following links
     explore_workflows: int = Field(3, ge=0)     # exploration: workflows proposed and tested

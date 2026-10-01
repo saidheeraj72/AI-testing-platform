@@ -180,7 +180,7 @@ class Explorer:
         """Returns a reason to stop, or "" to go on."""
         await self.browser.observe()
         # Empty objective: any login form counts here, even when the notes hold credentials.
-        blocker = detect_blocker(self.browser.last_nodes, "")
+        blocker = detect_blocker(self.browser.last_nodes, "", self.browser.page.url)
         if blocker is None:
             return ""
         if blocker.kind == "login_required" and re.search(r"password|passwd|credentials", self.notes, re.I):

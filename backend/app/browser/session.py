@@ -36,6 +36,7 @@ from app.browser.network import NetworkRecorder
 from app.browser.observation import ObservationLimits, build_observation
 from app.browser.profile import ProfileLock
 from app.browser.snapshot import Node, parse_snapshot
+from app.browser.vision import mark
 from app.safety.domain_scope import DomainScope
 from app.safety.secrets import REDACTED, is_secret_field, mask_snapshot
 from app.schemas.action import ActionError, ActionResult, Target
@@ -129,7 +130,7 @@ class BrowserSession:
             ctx.set_default_timeout(self.config.action_timeout_ms)
             ctx.set_default_navigation_timeout(self.config.navigation_timeout_ms)
             ctx.on("close", lambda _: setattr(self, "_context_closed", True))
-            await ctx.route(lambda url: not self.scope.allows(url), self._guard_navigation)
+            await ctx.route(lambda url: not self.scope.allows_navigation(url), self._guard_navigation)
             self.network.attach(ctx)
             if self.config.trace:
                 try:
@@ -254,6 +255,29 @@ class BrowserSession:
         path.with_suffix(".snapshot.yaml").write_text(mask_snapshot(raw))
         return observation
 
+    async def model_screenshot(self) -> Path:
+        """The viewport as the model sees it: CSS pixel scale, with the latest observation's refs drawn on it."""
+        self._require_running()
+        png = await self.page.screenshot(scale="css")
+        elements = self._last_observation.elements if self._last_observation else []
+        return mark(png, elements, self.storage.paths.vision_image(self._observation_seq))
+
+    def full_outline(self, max_chars: int = 40_000) -> str:
+        """The latest observation's outline without the viewport cut: the read_page tool."""
+        o = self._last_observation
+        if o is None:
+            return ""
+        full = build_observation(self.last_nodes, sequence=o.sequence, url=o.url, title=o.title, viewport=o.viewport,
+                                 limits=ObservationLimits(max_chars=max_chars, max_elements=2000))
+        return full.text
+
+    async def page_text(self, limit: int = 8000) -> str:
+        """All visible text of the page (not just the viewport), for reading content the outline shortens."""
+        self._require_running()
+        text = await self.page.evaluate("() => document.body ? document.body.innerText : ''")
+        text = "\n".join(line.strip() for line in text.splitlines() if line.strip())
+        return text if len(text) <= limit else text[:limit] + f"\n… ({len(text) - limit} more characters)"
+
     async def screenshot(self, *, full_page: bool = False) -> str:
         self._require_running()
         self._screenshot_seq += 1
@@ -294,6 +318,9 @@ class BrowserSession:
                 return observation, raw, nodes
             except PlaywrightError as e:  # usually "execution context destroyed" mid-navigation
                 last_error = e
+                if page.is_closed() or self._context_closed:
+                    self._require_running()  # switches to another open tab, or raises BrowserClosedError
+                    page = self.page
                 try:
                     await page.wait_for_load_state("domcontentloaded", timeout=5_000)
                 except PlaywrightError:
@@ -325,6 +352,28 @@ class BrowserSession:
             await (await self._locate(ref, result)).click()
 
         return await self._run("click", {"ref": ref}, body)
+
+    async def click_at(self, x: float, y: float) -> ActionResult:
+        """Click viewport coordinates (CSS pixels), for things the accessibility tree does not expose."""
+        async def body(result: ActionResult) -> None:
+            view = self._last_observation.viewport if self._last_observation else None
+            if x < 0 or y < 0 or (view and (x > view.width or y > view.height)):
+                raise _Failure(ActionError.INVALID_ARGUMENT, f"({x}, {y}) is outside the viewport")
+            result.target = await self.element_at(x, y)
+            await self.page.mouse.click(x, y)
+
+        return await self._run("click", {"x": x, "y": y}, body)
+
+    async def element_at(self, x: float, y: float) -> Target | None:
+        """Role and label of the clickable element at a point, as the risk policy and the report need them."""
+        found = await self.page.evaluate(_ELEMENT_AT_JS, [x, y])
+        return Target(role=found["role"], name=found["name"]) if found else None
+
+    async def hover(self, ref: str) -> ActionResult:
+        async def body(result: ActionResult) -> None:
+            await (await self._locate(ref, result)).hover()
+
+        return await self._run("hover", {"ref": ref}, body)
 
     async def type(self, ref: str, text: str, *, clear: bool = True, submit: bool = False) -> ActionResult:
         target = self._elements_by_ref.get(ref)
@@ -499,15 +548,15 @@ class BrowserSession:
         """
         if frame.parent_frame is not None or frame.url.startswith("chrome-error://"):
             return
-        if self.scope.allows(frame.url):
-            if frame.url != "about:blank":
+        if self.scope.allows_navigation(frame.url):
+            if frame.url != "about:blank" and self.scope.allows(frame.url):
                 self._last_in_scope_url = frame.url
         elif frame.url not in self.blocked_navigations[-1:]:
             self._blocked(frame.url)
 
     def _on_allowed_page(self) -> bool:
         url = self.page.url
-        return self.scope.allows(url) and not url.startswith("chrome-error://")
+        return self.scope.allows_navigation(url) and not url.startswith("chrome-error://")
 
     async def _return_to_scope(self) -> None:
         """After a blocked navigation: go back, or reload the last in-scope URL."""
@@ -572,6 +621,25 @@ class BrowserSession:
             raise RuntimeError("BrowserSession is not running")
         if self._context_closed:
             raise BrowserClosedError("The browser was closed")
+        if self.page is None or self.page.is_closed():
+            # The person closed the tab under test: carry on in another tab, or stop cleanly.
+            open_pages = [p for p in (self._context.pages if self._context else []) if not p.is_closed()]
+            if not open_pages:
+                raise BrowserClosedError("The browser tab was closed")
+            self.page = open_pages[-1]
+
+
+_ELEMENT_AT_JS = """([x, y]) => {
+  let el = document.elementFromPoint(x, y);
+  if (!el) return null;
+  const clickable = el.closest('a,button,input,select,textarea,summary,label,[role],[onclick],[tabindex]') || el;
+  const tag = clickable.tagName.toLowerCase();
+  const role = clickable.getAttribute('role')
+    || {a: 'link', button: 'button', input: 'textbox', select: 'combobox', textarea: 'textbox'}[tag] || 'generic';
+  const name = (clickable.getAttribute('aria-label') || clickable.innerText || clickable.value
+    || clickable.getAttribute('title') || '').trim().replace(/\\s+/g, ' ').slice(0, 80);
+  return {role, name};
+}"""
 
 
 def _first_line(error: Exception) -> str:

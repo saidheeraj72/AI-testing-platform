@@ -24,6 +24,13 @@ _TWO_LABEL_SUFFIXES = frozenset({
     "org.in", "co.jp", "co.nz", "com.br", "com.cn", "com.mx", "co.za", "com.sg",
 })
 _NON_HTTP_ALLOWED = frozenset({"about:blank"})
+# Single sign-on pages an app may send the browser to ("Sign in with Microsoft").
+# The browser may go there so the person can sign in; the agent never acts on them.
+IDENTITY_PROVIDERS = (
+    "login.microsoftonline.com", "login.live.com", "login.windows.net", "b2clogin.com",
+    "accounts.google.com", "appleid.apple.com", "okta.com", "oktapreview.com", "auth0.com",
+    "onelogin.com", "amazoncognito.com", "login.salesforce.com", "pingidentity.com", "duosecurity.com",
+)
 
 
 class ScopeError(ValueError):
@@ -71,6 +78,10 @@ class DomainScope:
             return host == self.host and port == self.port
         return _same_or_subdomain(host, self.host)
 
+    def allows_navigation(self, url: str) -> bool:
+        """Where the browser may be: the app under test, plus single sign-on pages while a person signs in."""
+        return self.allows(url) or is_identity_provider(url)
+
     def is_first_party(self, url: str) -> bool:
         parts = urlsplit(url)
         if not parts.hostname:
@@ -93,6 +104,14 @@ class DomainScope:
             base = f"{self.host} and *.{self.host}"
         extras = "".join(f", {d} and *.{d}" for d in self.extra_domains)
         return base + extras
+
+
+def is_identity_provider(url: str) -> bool:
+    parts = urlsplit(url)
+    if parts.scheme != "https" or not parts.hostname:
+        return False
+    host = _normalize_host(parts.hostname)
+    return any(_same_or_subdomain(host, d) for d in IDENTITY_PROVIDERS)
 
 
 def _normalize_host(host: str) -> str:

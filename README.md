@@ -187,6 +187,23 @@ uv run pytest                                              # unit + headless-Chr
 SEEDED_APP_URL=http://localhost:3000 uv run pytest         # also the seeded-app checks
 ```
 
+## How the agent works a step
+
+The executor works like Claude in Chrome. Within a step it holds a short conversation of tool calls and their results, and each turn it gets:
+
+- **The page outline**: an accessibility tree with a `[ref]` on everything actionable. Clickable cards keep their heading, text and inner buttons, so the model can tell two "Open Module" buttons apart.
+- **A screenshot of the viewport** with the same refs drawn on it ("set of marks"). The model reads cards, icons and layout from the image and answers with a ref. Small models give unreliable pixel coordinates, so clicking by `x`/`y` is the fallback for things without a ref.
+
+It then picks one tool:
+
+| Changes the page | Only looks |
+|---|---|
+| `click` (ref, or x/y), `hover`, `type`, `select`, `press`, `scroll`, `navigate`, `go_back`, `wait` | `find` (elements matching a description, ranked by label and surrounding card or section), `read_page` (the whole outline, beyond the viewport), `get_page_text`, `screenshot`, `read_console`, `read_network` |
+
+Every action result tells the model whether the action worked, where the browser is now, and whether the app answered with an HTTP error. When nothing on the page changed, the result says so, so the model tries something else instead of repeating itself. The planner also sees the start page and its screenshot, and plans from the links and cards that are actually there.
+
+Screenshots need a vision model; `gemma4:cloud` is one. For a text-only model, set `vision = "off"` under `[agent]`. With `"on_request"`, the model gets a screenshot at the start of each step and whenever it asks for one.
+
 ## How the agent decides that a step passed
 
 - **The planner writes the checks up front.** Each step gets 0–3 success criteria: `url_contains`, `text_visible` (optionally inside a named table or list), `element_present`, `field_value`, `request_succeeded`, `sum_equals`. The executor can only ask for them to be evaluated; it cannot change or weaken them.
@@ -244,7 +261,7 @@ The test pauses, its status becomes `WAITING_FOR_USER`, and the UI tells you wha
 
 For projects that keep their login, **Set up login** opens Chrome with the project's profile at the target URL. Log in once, click **Done**, and later tests start logged in.
 
-If a navigation is blocked because it's part of the login (single sign-on), add that domain under the project's **Extra allowed domains**.
+**Single sign-on** ("Sign in with Microsoft / Google / Okta…"): the browser may go to known identity providers, and the test then waits for you to sign in there. The agent never types into those pages and never crawls them. For any other sign-in domain, add it under the project's **Extra allowed domains**.
 
 ## Writing objectives that can find bugs
 

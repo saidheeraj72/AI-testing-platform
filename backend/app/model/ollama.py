@@ -34,7 +34,7 @@ class OllamaProvider(ModelProvider):
         temperature = s.temperature if temperature is None else temperature
         body = {
             "model": s.name,
-            "messages": [{"role": m.role, "content": m.content} for m in messages],
+            "messages": [_message(m) for m in messages],
             "stream": False,
             "format": schema,
             "think": s.think,
@@ -55,6 +55,9 @@ class OllamaProvider(ModelProvider):
         if response.status_code == 404:
             raise ModelError(f"Ollama has no model {s.name!r}. Run: ollama pull {s.name}")
         if response.status_code >= 400:
+            if any(m.images for m in messages) and "image" in response.text.lower():
+                raise ModelError(f"{s.name} cannot read screenshots. Use a vision model, or set "
+                                 "[agent] vision = \"off\" in ai-tester.toml.")
             raise ModelError(f"Ollama error {response.status_code}: {response.text[:300]}")
 
         data = response.json()
@@ -66,3 +69,10 @@ class OllamaProvider(ModelProvider):
 
     async def close(self) -> None:
         await self._client.aclose()
+
+
+def _message(m: Message) -> dict[str, Any]:
+    out: dict[str, Any] = {"role": m.role, "content": m.content}
+    if m.images:
+        out["images"] = m.images_base64()
+    return out

@@ -36,6 +36,7 @@ TRANSPARENT_ROLES = frozenset({"generic", "none", "presentation", "rowgroup"})
 STATE_ATTRS = ("disabled", "checked", "selected", "expanded", "pressed", "active", "required", "readonly")
 
 _REF_TOKEN = re.compile(r"\[(?:f\d+)?e\d+\] ")
+_FOCUS = re.compile(r"(?:, )?\bfocused\b(?:, )?")
 MAX_LABEL = 60
 MAX_TEXT_LINE = 200
 
@@ -90,7 +91,7 @@ def build_observation(
         text=text,
         omitted_lines=omitted,
         notices=notices or [],
-        fingerprint=hashlib.sha1(_REF_TOKEN.sub("", text).encode()).hexdigest()[:16],
+        fingerprint=_fingerprint(text),
     )
 
 
@@ -131,12 +132,18 @@ def _visit(
     )
 
     if is_element:
-        element = _element(node, box, distance, context, frame)
+        card = role not in INTERACTIVE_ROLES and bool(node.children)
+        # A clickable card (a div with an onclick) is named by its text, like a button would be.
+        element = _element(node, box, distance, context, frame,
+                           name=_clip(_first_text(node) or _text_of(node), MAX_LABEL) if card and not node.name else None)
         walk.elements.append(element)
         emit(_element_line(element, node), is_element=True)
-        # Only descend into composite widgets whose parts are separately actionable.
+        # Descend into composite widgets whose parts are separately actionable, and into cards:
+        # their headings and buttons ("Open Module") must stay visible to the model.
         if role in ("listbox", "menu", "tablist", "radiogroup"):
             children(1, context + [_label(node)])
+        elif card:
+            children(1, context + [f'{role} "{element.name}"' if element.name else role])
         return
 
     if role == "text":
@@ -179,7 +186,14 @@ def _visit(
     emit(f"text: {_text_of(node)}")
 
 
-def _element(node: Node, box: Box | None, distance: float, context: list[str], frame: str) -> Element:
+def _fingerprint(text: str) -> str:
+    """Identifies what the page shows. Refs and focus are left out: focusing a button changes nothing visible."""
+    text = _FOCUS.sub("", _REF_TOKEN.sub("", text)).replace(" ()", "")
+    return hashlib.sha1(text.encode()).hexdigest()[:16]
+
+
+def _element(node: Node, box: Box | None, distance: float, context: list[str], frame: str,
+             name: str | None = None) -> Element:
     states = [a for a in STATE_ATTRS if node.attrs.get(a) is True or node.attrs.get(a) == "true"]
     options = [c.name for c in node.children if c.role == "option"]
     value = node.text
@@ -191,7 +205,8 @@ def _element(node: Node, box: Box | None, distance: float, context: list[str], f
     return Element(
         ref=node.ref or "",
         role=node.role,
-        name=node.name or (node.text if node.role not in ("textbox", "searchbox", "spinbutton", "combobox") else "") or "",
+        name=name or node.name or (node.text if node.role not in ("textbox", "searchbox", "spinbutton", "combobox")
+                                   else "") or "",
         value=value if node.role not in ("button", "link", "tab", "menuitem", "generic") else None,
         url=node.props.get("url"),
         states=states,

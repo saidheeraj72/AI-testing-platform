@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import type { Activity } from "../state/liveSession";
 
 const ICON: Record<Activity["kind"], string> = {
-  step: "▸", thought: "·", action: "", replan: "↻", bug: "!", confirm: "?", info: "i", error: "✗",
+  step: "▸", thought: "·", action: "", look: "⌕", replan: "↻", bug: "!", confirm: "?", info: "i", error: "✗",
 };
 
 export function ActivityFeed({ items }: { items: Activity[] }) {

@@ -1,8 +1,11 @@
 """TestAgent: planner + a single executor, one step at a time.
 
-Python owns the state. Each model call sees the objective, the plan, the
-current step, this step's recent actions and the current page, never a
-growing transcript. Steps pass only when code-evaluated checks pass.
+The executor works like Claude in Chrome: within a step it holds a short
+conversation of tool calls and their results (click, type, find, read_page,
+read_network, ...), and each turn it sees the current page as an outline
+with [refs] plus a screenshot with the same refs drawn on it. Python still
+owns the state: the plan, budgets, loop detection, risk policy and, above
+all, the checks. Steps pass only when code-evaluated checks pass.
 
 A step ends as:
   PASSED            every check passed
@@ -22,10 +25,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from app.agent.assertions import PageState, VerifyArgs, evaluate, needs_verify_args
+from app.agent.assertions import NO_FIELD, PageState, VerifyArgs, evaluate, needs_verify_args
 from app.agent.blockers import detect_blocker
 from app.agent.budgets import BudgetExceeded, SessionBudget
 from app.agent.control import SessionControl
+from app.agent import tools
 from app.agent.decision import Decision, validator_for
 from app.agent.loops import LoopDetector
 from app.agent.planner import Planner
@@ -37,7 +41,7 @@ from app.model.client import InvalidModelOutput, StructuredModel
 from app.model.provider import Message, ModelError
 from app.safety.risk import risky_reason
 from app.schemas.action import ActionResult
-from app.schemas.observation import Observation
+from app.schemas.observation import Element, Observation
 from app.schemas.plan import CheckResult, Step, StepStatus
 
 log = logging.getLogger(__name__)
@@ -45,7 +49,8 @@ log = logging.getLogger(__name__)
 EventSink = Callable[[dict[str, Any]], None]
 ConfirmFn = Callable[[str], Awaitable[bool]]
 AskUserFn = Callable[[str, str], Awaitable[bool]]  # (kind, message) -> continue?
-RECENT_ACTIONS = 6
+RECENT_TURNS = 10  # tool calls of this step the executor sees in full; older ones are left out
+FULL_RESULTS = 2  # the latest results are shown in full, earlier ones shortened
 
 
 class _StepEnded(Exception):
@@ -102,6 +107,8 @@ class TestAgent:
         self.loops = LoopDetector()
         self._url_typed_by_agent: str | None = None  # page the agent reached with its own navigate
         self._typed_fields: set[str] = set()  # fields the agent typed into since the page last loaded
+        self._turns: list[tuple[str, str]] = []  # this step's (tool call JSON, result) conversation
+        self._want_screenshot = False
 
     # ------------------------------------------------------------------ session
 
@@ -110,7 +117,7 @@ class TestAgent:
             await self.browser.navigate(self.browser.scope.target_url)
             observation = await self.browser.observe()
             self.steps = await self.planner.plan(self.objective, self.test_data, observation, self.first_sequence,
-                                                 stated=self.stated)
+                                                 stated=self.stated, image=await self._planner_image())
             for step in self.steps:
                 step.workflow = self.workflow
             self.emit({"type": "plan_created", "steps": [s.model_dump(mode="json") for s in self.steps]})
@@ -186,54 +193,73 @@ class TestAgent:
     async def _step_loop(self, step: Step) -> None:
         cfg = self.settings.agent
         acted = 0
+        looked = 0
         verify_failures = 0
-        feedback = ""
         checked = bool(step.criteria)
         needs_args = any(needs_verify_args(c) for c in step.criteria)
         already_true: bool | None = None  # were all checks true before this step did anything?
+        self._turns = []
+        self._want_screenshot = cfg.vision != "off"  # every step starts by looking
+        previous: str | None = None  # page fingerprint before the latest action
+        after_action = False
+        last_verify: list[CheckResult] | None = None  # results of the executor's latest "verify"
 
         while True:
             await self.control.checkpoint()
             self.budget.check_time()
             observation = await self.browser.observe()
-            if reason := self.loops.record_page(observation.fingerprint):
-                await self._unfinished(step, f"stuck: {reason}", observation)
+            if after_action:
+                if reason := self.loops.record_page(observation.fingerprint):
+                    await self._unfinished(step, f"stuck: {reason}", observation)
+                if observation.fingerprint == previous:
+                    self._note("Nothing on the page changed.")
+            previous, after_action = observation.fingerprint, False
 
             # Checks run after every action, so the model needn't spend a call to say "done".
             # Checks that were already true before the step started prove nothing on their own;
             # then only an explicit "verify" from the executor can complete the step.
             if checked and not needs_args and already_true is None:
-                already_true = all(r.passed for r in self._check(step))
+                already_true = _passes(self._check(step))
             if checked and acted:
                 results = self._check(step)
-                if not needs_args and not already_true and all(r.passed for r in results):
+                if not needs_args and not already_true and _passes(results):
                     self._end(step, StepStatus.PASSED, results, "all checks passed")
                 if errors := [r for r in results if r.app_error]:
                     self._end(step, StepStatus.FAILED, results, errors[0].detail)
 
-            # CAPTCHAs, MFA codes and logins without credentials go to a person, before the model sees them.
-            if blocker := detect_blocker(self.browser.last_nodes, self.objective):
+            # CAPTCHAs, MFA codes, single sign-on and logins without credentials go to a person,
+            # before the model sees them.
+            if blocker := detect_blocker(self.browser.last_nodes, self.objective, self.browser.page.url):
                 await self._hand_to_user(step, blocker.kind, blocker.message)
                 continue
 
             if acted >= cfg.max_actions_per_step:
                 await self._unfinished(step, f"not done after {acted} actions", observation)
+            if looked >= cfg.max_actions_per_step:
+                await self._unfinished(step, f"looked at the page {looked} times without getting it done", observation)
 
-            decision = await self._decide(step, observation, feedback)
-            feedback = ""
+            decision = await self._decide(step, observation)
+
+            if decision.looks:
+                looked += 1
+                self._record(decision, await self._look(step, decision, observation))
+                if reason := self.loops.record_action(decision.signature()):
+                    await self._unfinished(step, f"stuck: {reason}", observation)
+                continue
 
             if decision.action == "verify" and not checked:
                 # The planner gave no usable check for this step; the executor's word is all there is.
                 if acted:
                     self._end(step, StepStatus.PASSED, [], "done according to the agent (no automatic check)")
-                feedback = "Do the step first; nothing has been done in this step yet."
+                self._record(decision, "Do the step first; nothing has been done in this step yet.")
                 continue
 
             if decision.action == "verify":
                 results = self._check(step, VerifyArgs(decision.parts or [], decision.total))
-                if all(r.passed for r in results):
+                last_verify = results
+                if _passes(results):
                     self._end(step, StepStatus.PASSED, results, "all checks passed")
-                failed = [r for r in results if not r.passed]
+                failed = [r for r in results if not r.passed and not _missing_field(r)]
                 if any(r.app_error for r in failed):
                     self._end(step, StepStatus.FAILED, results, next(r.detail for r in failed if r.app_error))
                 verify_failures += 1
@@ -244,52 +270,114 @@ class TestAgent:
                         self._end(step, StepStatus.FAILED, results,
                                   f"{grounded[0].criterion.describe()}: {grounded[0].detail}")
                     await self._unfinished(step, "checks did not pass: " + _details(failed), observation)
-                feedback = "The checks did not pass: " + _details(failed)
+                self._record(decision, "The checks did not pass: " + _details(failed))
                 continue
 
             if decision.action == "give_up":
+                # The model's conclusion is not evidence, but the checks are: when a check the user asked
+                # for fails as the agent gives up, the step failed exactly as if it had verified twice.
+                results = last_verify if needs_args else self._check(step)
+                grounded = [r for r in results or [] if not r.passed and r.criterion.grounded and not r.inconclusive]
+                if grounded and (acted or needs_args or _is_verification(step)):
+                    self._end(step, StepStatus.FAILED, results or [],
+                              f"{grounded[0].criterion.describe()}: {grounded[0].detail}")
                 await self._unfinished(step, f"agent gave up: {decision.reasoning}", observation)
 
             if decision.action == "ask_user":
                 await self._hand_to_user(step, "agent_request", decision.reasoning)
+                self._record(decision, "The person is done. Look at the page again before you continue.")
                 continue
 
-            feedback = await self._act(step, decision, observation)
+            self._record(decision, await self._act(step, decision, observation))
             acted += 1
+            after_action = True
             if reason := self.loops.record_action(decision.signature()):
                 await self._app_ignored(step, self.actions[-1])
                 await self._unfinished(step, f"stuck: {reason}", observation)
 
-    async def _decide(self, step: Step, observation: Observation, feedback: str) -> Decision:
+    async def _decide(self, step: Step, observation: Observation) -> Decision:
         progress = "\n".join(
             f"  {s.sequence}. [{'current' if s is step else s.status.lower()}] {s.goal}"
             for s in self.steps if s.status != StepStatus.REPLANNED
         )
         checks = "\n".join(f"  - {c.describe()}" for c in step.criteria) or "  - (no automatic check: reply verify when done)"
-        recent = [a for a in self.actions if a.sequence >= (step.first_action or 0)][-RECENT_ACTIONS:]
-        history = "\n".join(_describe_action(a) for a in recent) or "  (none yet)"
-        user = (
+        header = (
             f"OBJECTIVE: {self.objective}\nTEST DATA (for new records only):\n{self.test_data.lines()}\n\n"
             f"PLAN:\n{progress}\n\n"
-            f"CURRENT STEP: {step.goal}\nThe step is complete when:\n{checks}\n\n"
-            f"ACTIONS IN THIS STEP:\n{history}\n"
-            + (f"\nFEEDBACK: {feedback}\n" if feedback else "")
-            + f"\n{page_block(observation)}\n\nReply with the next action."
+            f"CURRENT STEP: {step.goal}\nThe step is complete when:\n{checks}"
         )
+        images = []
+        if self.settings.agent.vision == "always" or self._want_screenshot:
+            images = [await self.browser.model_screenshot()]
+            self._want_screenshot = False
+        shown = "\nSCREENSHOT: attached; it shows the viewport with the refs drawn on it." if images else ""
+        page = f"\n\n{page_block(observation)}{shown}\n\nReply with the next tool call."
+
+        turns = self._turns[-RECENT_TURNS:]
+        messages = [Message("system", EXECUTOR_SYSTEM)]
+        if not turns:
+            messages.append(Message("user", header + page, images))
+        else:
+            hidden = len(self._turns) - len(turns)
+            note = f"\n({hidden} earlier tool calls in this step are not shown.)" if hidden else ""
+            messages.append(Message("user", header + note + "\n\nStart the step."))
+            for i, (call, result) in enumerate(turns):
+                last = i == len(turns) - 1
+                if i < len(turns) - FULL_RESULTS:
+                    result = _clip(result, 300)
+                messages.append(Message("assistant", call))
+                messages.append(Message("user", f"RESULT: {result}" + (page if last else ""), images if last else []))
+
         decision = await self.executor.generate(
-            Decision,
-            [Message("system", EXECUTOR_SYSTEM), Message("user", user)],
-            purpose="execute",
-            step=step.sequence,
-            validate=validator_for(observation),
+            Decision, messages, purpose="execute", step=step.sequence, validate=validator_for(observation),
         )
         self.emit({"type": "decision", "step": step.sequence, "action": decision.action,
                    "reasoning": decision.reasoning})
         return decision
 
+    async def _look(self, step: Step, d: Decision, observation: Observation) -> str:
+        """Run a tool that only reads the page. Returns its result for the model."""
+        b = self.browser
+        since = step.first_action or 0
+        match d.action:
+            case "find":
+                result = tools.find(d.query or "", observation, b.last_nodes)
+            case "read_page":
+                result = b.full_outline()
+            case "get_page_text":
+                result = await b.page_text()
+            case "screenshot":
+                if self.settings.agent.vision == "off":
+                    result = "Screenshots are turned off in the settings; use read_page or find."
+                else:
+                    self._want_screenshot = True
+                    result = "A fresh screenshot is attached below."
+            case "read_console":
+                result = tools.console_report(b.console.since(since))
+            case _:
+                result = tools.network_report(b.network.since(since))
+        self.emit({"type": "looked", "step": step.sequence, "action": d.action, "query": d.query,
+                   "result": _clip(result, 400)})
+        return result
+
+    def _record(self, decision: Decision, result: str) -> None:
+        self._turns.append((decision.model_dump_json(exclude_none=True), result))
+
+    def _note(self, text: str) -> None:
+        """Add an observation to the latest tool result, e.g. that the page did not change."""
+        if self._turns:
+            call, result = self._turns[-1]
+            self._turns[-1] = (call, f"{result} {text}")
+
+    async def _planner_image(self):
+        return await self.browser.model_screenshot() if self.settings.agent.vision != "off" else None
+
     async def _act(self, step: Step, d: Decision, observation: Observation) -> str:
-        """Run one browser action. Returns feedback for the next decision ("" when none)."""
+        """Run one browser action. Returns its result for the model."""
         element = next((e for e in observation.elements if e.ref == d.ref), None)
+        if d.action == "click" and not d.ref and d.x is not None and d.y is not None:
+            target = await self.browser.element_at(d.x, d.y)
+            element = Element(ref="", role=target.role, name=target.name) if target else None
         if reason := risky_reason(d.action, element):
             policy = self.settings.safety.risky_actions
             allowed = policy == "allow"
@@ -301,8 +389,12 @@ class TestAgent:
 
         b = self.browser
         match d.action:
-            case "click":
+            case "click" if d.ref:
                 result = await b.click(d.ref)
+            case "click":
+                result = await b.click_at(d.x or 0, d.y or 0)
+            case "hover":
+                result = await b.hover(d.ref)
             case "type":
                 result = await b.type(d.ref, d.text or "", submit=bool(d.submit))
             case "select":
@@ -327,7 +419,7 @@ class TestAgent:
         elif result.navigated:
             self._url_typed_by_agent = None
         self.emit({"type": "action_completed", "step": step.sequence, **_action_event(result)})
-        return "" if result.ok else f"Your last action failed: {result.error}: {result.message}"
+        return _action_report(result, self.browser.network.since(result.sequence))
 
     def _check(self, step: Step, args: VerifyArgs | None = None) -> list[CheckResult]:
         page = PageState(
@@ -417,6 +509,7 @@ class TestAgent:
             done = [s for s in self.steps[:index] if s.status == StepStatus.PASSED]
             new_steps = await self.planner.replan(
                 self.objective, self.test_data, done, step, self.steps[index + 1:], observation, stated=self.stated,
+                image=await self._planner_image(),
             )
             for new_step in new_steps:
                 new_step.workflow = self.workflow
@@ -425,6 +518,18 @@ class TestAgent:
                        "steps": [s.model_dump(mode="json") for s in new_steps]})
             self._end(step, StepStatus.REPLANNED, results, reason)
         self._end(step, StepStatus.COULD_NOT_VERIFY, results, reason)
+
+
+def _missing_field(r: CheckResult) -> bool:
+    """A field check for a field this page does not have, e.g. "First Name" on an order confirmation."""
+    return r.inconclusive and r.criterion.type == "field_value" and r.detail.startswith(NO_FIELD)
+
+
+def _passes(results: list[CheckResult]) -> bool:
+    """All checks pass. A check on a field the page does not have cannot be evaluated here; it does not
+    block a step that the other checks prove. Alone, it proves nothing."""
+    applicable = [r for r in results if not _missing_field(r)] or results
+    return all(r.passed for r in applicable)
 
 
 def _matches_goal(label: str, goal: str) -> bool:
@@ -442,12 +547,25 @@ def _details(results: list[CheckResult]) -> str:
     return "; ".join(f"{r.criterion.describe()} -> {r.detail}" for r in results)
 
 
-def _describe_action(a: ActionResult) -> str:
+def _action_report(a: ActionResult, network: list) -> str:
+    """What the model learns from its action: did it work, where is the browser now, did the app complain."""
     target = f' {a.target.role} "{a.target.name}"' if a.target else ""
-    args = {k: v for k, v in a.arguments.items() if k != "ref" and v not in (None, False)}
-    outcome = "ok" if a.ok else f"FAILED {a.error}: {a.message}"
-    moved = f" (now at {a.url_after})" if a.navigated else ""
-    return f"  #{a.sequence} {a.action}{target} {args or ''} -> {outcome}{moved}"
+    if not a.ok:
+        return f"{a.action}{target} FAILED: {a.message} Try something different."
+    parts = [f"{a.action}{target}: done."]
+    if a.navigated:
+        parts.append(f"The browser is now at {a.url_after}.")
+    errors = [e for e in network if e.first_party and e.is_error and e.resource_type in ("fetch", "xhr", "document")]
+    for e in errors[:3]:
+        status = f"HTTP {e.status}" if e.status is not None else e.failure
+        parts.append(f"The application answered {e.method} {e.url} with {status}.")
+    if errors:
+        parts.append('If this was not expected, reply "verify" so the checks record it.')
+    return " ".join(parts)
+
+
+def _clip(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 def _action_event(a: ActionResult) -> dict[str, Any]:

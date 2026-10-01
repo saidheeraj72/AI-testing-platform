@@ -313,3 +313,39 @@ async def test_captcha_goes_to_a_person_before_the_model_sees_it(site, tmp_path)
     assert asked == ["captcha"]
     assert len(provider.prompts) == 2  # plan + the navigate; never asked about the CAPTCHA itself
     assert result.steps[0].status == StepStatus.BLOCKED
+
+
+async def test_giving_up_on_a_check_the_user_asked_for_is_a_bug(site, tmp_path):
+    # The model sees the expected text is missing and gives up; the grounded check decides, not the model.
+    result, _, _ = await run_agent(site, tmp_path, [
+        plan(("Submit Test User-qa1", [{"type": "text_visible", "value": "Welcome Test User-qa1"}])),
+        act("type", 'textbox "Name"', text="Test User-qa1", submit=True),
+        act("give_up"),
+    ], objective='Submit Test User-qa1 and check that "Welcome Test User-qa1" is shown')
+    assert result.steps[0].status == StepStatus.FAILED
+    assert result.outcome == "BUGS_FOUND"
+
+
+async def test_a_check_on_a_field_the_page_lacks_does_not_block_the_step(site, tmp_path):
+    result, _, _ = await run_agent(site, tmp_path, [
+        plan(("Open page two", [{"type": "url_contains", "value": "/page2"},
+                                {"type": "field_value", "name": "First Name", "value": "Test"}])),
+        act("click", 'link "Page two"'),
+    ], objective="Open /page2")
+    assert result.steps[0].status == StepStatus.PASSED
+
+
+async def test_look_tools_answer_without_acting_and_feed_the_conversation(site, tmp_path):
+    result, provider, storage = await run_agent(site, tmp_path, [
+        plan(("Open page two", [{"type": "url_contains", "value": "/page2"}])),
+        act("find", query="page two link"),
+        act("read_network"),
+        lambda prompt: {"reasoning": "from find", "action": "click",
+                        "ref": re.search(r'RESULT: \[((?:f\d+)?e\d+)\] link "Page two"', prompt)[1]},
+    ])
+    assert result.outcome == "PASS"
+    assert [a.action for a in result.actions] == ["click"]  # looking is not acting
+    last = provider.prompts[-1]
+    assert "No page loads or API requests" in last or "GET" in last  # read_network's answer
+    calls = [json.loads(line) for line in storage.paths.model_calls.read_text().splitlines()]
+    assert any(m.get("images") for m in calls[-1]["prompt"])  # the executor saw a screenshot

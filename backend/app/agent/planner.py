@@ -9,6 +9,7 @@ guess about the UI means "could not verify".
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from app.agent.prompts import PLANNER_SYSTEM, page_block
 from app.agent.test_data import TestData
@@ -26,7 +27,7 @@ class Planner:
         self.max_steps = max_steps
 
     async def plan(self, objective: str, test_data: TestData, observation: Observation,
-                   first_sequence: int = 1, stated: str | None = None) -> list[Step]:
+                   first_sequence: int = 1, stated: str | None = None, image: Path | None = None) -> list[Step]:
         """`stated`: the text the user actually wrote, which grounds checks (default: the objective).
 
         In exploration the objective is written by a model, so only the user's notes ground anything.
@@ -34,7 +35,8 @@ class Planner:
         messages = [
             Message("system", PLANNER_SYSTEM.format(max_steps=self.max_steps)),
             Message("user", f"OBJECTIVE: {objective}\nTEST DATA:\n{test_data.lines()}\n\n"
-                            f"The browser is on the start page:\n{page_block(observation)}\n\nWrite the plan."),
+                            f"The browser is on the start page{_shown(image)}:\n{page_block(observation)}\n\n"
+                            "Write the plan.", _images(image)),
         ]
         output = await self.model.generate(PlannerOutput, messages, purpose="plan", validate=self._validate)
         return self._to_steps(output, objective if stated is None else stated, test_data,
@@ -49,6 +51,7 @@ class Planner:
         remaining: list[Step],
         observation: Observation,
         stated: str | None = None,
+        image: Path | None = None,
     ) -> list[Step]:
         done_text = "\n".join(f"  {s.sequence}. {s.goal}" for s in done) or "  (none)"
         messages = [
@@ -57,10 +60,10 @@ class Planner:
                 f"OBJECTIVE: {objective}\nTEST DATA:\n{test_data.lines()}\n\n"
                 f"Already completed (do not repeat):\n{done_text}\n"
                 f"This step could not be completed: {failed.goal}\nReason: {failed.reason}\n\n"
-                f"The browser is now here:\n{page_block(observation)}\n\n"
+                f"The browser is now here{_shown(image)}:\n{page_block(observation)}\n\n"
                 "Write a new plan for the remaining work only, starting from this page. "
                 "Take a different approach to the failed step."
-            )),
+            ), _images(image)),
         ]
         output = await self.model.generate(PlannerOutput, messages, purpose="replan", validate=self._validate)
         steps = self._to_steps(output, objective if stated is None else stated, test_data,
@@ -68,7 +71,9 @@ class Planner:
 
         # The objective's grounded checks must survive replanning, or the new plan could quietly skip them.
         kept = {c.key for s in steps for c in s.criteria}
-        dropped = [c for s in [failed, *remaining] for c in s.criteria if c.grounded and c.key not in kept]
+        # Field checks are left out: they belong to one form, and on the next page that field no longer exists.
+        dropped = [c for s in [failed, *remaining] for c in s.criteria
+                   if c.grounded and c.key not in kept and c.type != "field_value"]
         steps[-1].criteria.extend({c.key: c for c in dropped}.values())
         return steps
 
@@ -104,6 +109,14 @@ class Planner:
             )
             for i, planned in enumerate(output.steps)
         ]
+
+
+def _shown(image: Path | None) -> str:
+    return " (the SCREENSHOT shows it)" if image else ""
+
+
+def _images(image: Path | None) -> list[Path]:
+    return [image] if image else []
 
 
 def _criterion_problem(c: PlannedCriterion) -> str | None:

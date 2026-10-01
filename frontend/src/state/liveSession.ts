@@ -17,7 +17,7 @@ export interface LiveStep {
   checks: LiveCheck[];
 }
 
-export type ActivityKind = "step" | "thought" | "action" | "replan" | "bug" | "confirm" | "info" | "error";
+export type ActivityKind = "step" | "thought" | "action" | "look" | "replan" | "bug" | "confirm" | "info" | "error";
 
 export interface Activity {
   seq: number;
@@ -108,6 +108,15 @@ export function reduceEvent(state: LiveSession, e: AgentEvent): LiveSession {
         detail += " If this site is part of the login (single sign-on), add it to the project's extra allowed domains.";
       }
       log("action", text, { ok: e.ok as boolean, detail });
+      break;
+    }
+    case "looked": {
+      const LABEL: Record<string, string> = {
+        find: "Searched the page", read_page: "Read the whole page", get_page_text: "Read the page text",
+        screenshot: "Took a screenshot", read_console: "Read the console", read_network: "Read the network requests",
+      };
+      const what = LABEL[e.action as string] ?? String(e.action);
+      log("look", e.query ? `${what} for "${e.query}"` : what, { detail: e.result as string });
       break;
     }
     case "checks":

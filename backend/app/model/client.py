@@ -88,7 +88,7 @@ class StructuredModel:
                 "latency_ms": latency_ms,
                 "response_type": getattr(parsed, "action", None) or schema.__name__,
                 "validation_error": error,
-                "prompt": [m.__dict__ for m in conversation],
+                "prompt": [m.log() for m in conversation],
                 "response": completion.text,
             })
             if error is None and parsed is not None:
@@ -106,20 +106,25 @@ def _with_schema_instruction(messages: list[Message], json_schema: dict) -> list
         "Use exactly these field names:\n" + json.dumps(json_schema, separators=(",", ":"))
     )
     if messages and messages[0].role == "system":
-        return [Message("system", messages[0].content + instruction), *messages[1:]]
+        return [Message("system", messages[0].content + instruction, messages[0].images), *messages[1:]]
     return [Message("system", instruction.strip()), *messages]
 
 
 def extract_json(text: str) -> str:
-    """The JSON object in a reply, without code fences or surrounding prose."""
+    """The JSON object in a reply, without code fences, surrounding prose or trailing commas."""
     text = text.strip()
-    if text.startswith("{"):
-        return text
     fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.S)
-    if fenced:
-        return fenced[1]
-    start, end = text.find("{"), text.rfind("}")
-    return text[start:end + 1] if 0 <= start < end else text
+    if not text.startswith("{") and fenced:
+        text = fenced[1]
+    elif not text.startswith("{"):
+        start, end = text.find("{"), text.rfind("}")
+        text = text[start:end + 1] if 0 <= start < end else text
+    return _TRAILING_COMMA.sub(r"\1", text)
+
+
+# {"a": 1,} -> {"a": 1}. Only outside strings would be exact; a comma before a closing bracket inside a
+# string value is rare enough in these replies (short reasoning sentences) to accept.
+_TRAILING_COMMA = re.compile(r",\s*([}\]])")
 
 
 def _short_validation_error(e: ValidationError) -> str:

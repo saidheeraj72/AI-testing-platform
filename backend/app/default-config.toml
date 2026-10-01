@@ -10,7 +10,7 @@ base_url = "http://localhost:11434"  # openai_compatible: e.g. http://localhost:
 name = "gemma4:cloud"                # local option on 8 GB RAM: "qwen3:4b" (with think = false)
 api_key = ""                         # env AI_TESTER_MODEL_API_KEY overrides
 temperature = 0.0
-context_window = 8192                # ollama num_ctx for local models; the Ollama default (4096) is too small
+context_window = 32768               # ollama num_ctx; the Ollama default (4096) is too small (16384 for 8 GB RAM)
 think = false                        # false | true | "low" | "medium" | "high" (levels: gpt-oss)
 timeout_seconds = 180
 max_output_tokens = 1024             # stops a model that never finishes its JSON
@@ -30,6 +30,7 @@ max_replans = 2
 max_model_calls = 80
 max_duration_seconds = 900
 observation_max_chars = 12000        # page outline size sent to the model (6000 for small local models)
+vision = "always"                    # screenshots for the model: always | on_request | off (text-only models)
 max_analyzer_calls = 12              # bug analysis after the run; 0 = describe bugs by rules only
 explore_max_pages = 15               # exploration mode: pages crawled by following links
 explore_workflows = 3                # exploration mode: workflows proposed and tested

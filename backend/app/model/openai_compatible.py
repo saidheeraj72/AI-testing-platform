@@ -25,7 +25,7 @@ class OpenAICompatibleProvider(ModelProvider):
         temperature = s.temperature if temperature is None else temperature
         body: dict[str, Any] = {
             "model": s.name,
-            "messages": [{"role": m.role, "content": m.content} for m in messages],
+            "messages": [_message(m) for m in messages],
             "temperature": temperature,
             "max_tokens": s.max_output_tokens,
             "response_format": {"type": "json_schema", "json_schema": {"name": "response", "schema": schema}},
@@ -53,3 +53,11 @@ class OpenAICompatibleProvider(ModelProvider):
 
     async def close(self) -> None:
         await self._client.aclose()
+
+
+def _message(m: Message) -> dict[str, Any]:
+    if not m.images:
+        return {"role": m.role, "content": m.content}
+    parts: list[dict[str, Any]] = [{"type": "text", "text": m.content}]
+    parts += [{"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}} for b64 in m.images_base64()]
+    return {"role": m.role, "content": parts}

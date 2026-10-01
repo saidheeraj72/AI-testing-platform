@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 from app.browser.snapshot import Node
+from app.safety.domain_scope import is_identity_provider
 from app.safety.secrets import is_secret_field
 
 EDITABLE = ("textbox", "searchbox", "spinbutton")
@@ -39,8 +41,12 @@ class Blocker:
     message: str
 
 
-def detect_blocker(nodes: list[Node], objective: str) -> Blocker | None:
+def detect_blocker(nodes: list[Node], objective: str, url: str = "") -> Blocker | None:
     """The first thing on this page that needs a human, if any."""
+    if is_identity_provider(url):
+        # Single sign-on: often MFA, and never the application under test. Always a person's job.
+        return Blocker("login_required", f"Sign in on {urlsplit(url).hostname} in the Chrome window. When you are "
+                                         "back in the application, click Continue.")
     every = [n for root in nodes for n in root.walk()]
     texts = " ".join(filter(None, (t for n in every for t in (n.name, n.text))))
 
