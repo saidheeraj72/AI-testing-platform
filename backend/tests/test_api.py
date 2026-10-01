@@ -19,7 +19,7 @@ ORIGIN = "http://localhost:5173"
 
 
 async def fake_runner(*, url, objective, settings, project, allow_domains, on_event, confirm, storage: SessionStorage,
-                      control, provider_factory, ask_user):
+                      control, provider_factory, ask_user, mode="objective"):
     """Stands in for run_session: emits events, honours pause/confirm/cancel, writes a report."""
     on_event({"type": "session_started", "session_id": storage.session_id, "url": url, "objective": objective})
     on_event({"type": "plan_created", "steps": [{"sequence": 1}, {"sequence": 2}]})

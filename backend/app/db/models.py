@@ -37,6 +37,7 @@ class Session(Base):
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
     objective: Mapped[str] = mapped_column(Text)
+    mode: Mapped[str] = mapped_column(String(20), default="objective", server_default="objective")
     status: Mapped[str] = mapped_column(String(30), index=True)
     outcome: Mapped[str | None] = mapped_column(String(30))
     reason: Mapped[str | None] = mapped_column(Text)

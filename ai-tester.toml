@@ -31,6 +31,8 @@ max_model_calls = 80
 max_duration_seconds = 900
 observation_max_chars = 12000        # page outline size sent to the model (6000 for small local models)
 max_analyzer_calls = 12              # bug analysis after the run; 0 = describe bugs by rules only
+explore_max_pages = 15               # exploration mode: pages crawled by following links
+explore_workflows = 3                # exploration mode: workflows proposed and tested
 
 [browser]
 headless = false

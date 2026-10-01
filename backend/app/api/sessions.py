@@ -28,7 +28,7 @@ EVIDENCE_TYPES = {".png": "screenshot", ".zip": "trace", ".json": "json", ".json
 @router.post("", status_code=201)
 async def create_session(body: SessionCreate, c: Ctx) -> SessionOut:
     project = await get_project_or_404(c, body.project_id)
-    session_id = await c.manager.create(project, body.objective)
+    session_id = await c.manager.create(project, body.objective, mode=body.mode)
     if body.start:
         await _start(c, session_id)
     return await _session_out(c, session_id)

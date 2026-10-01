@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from app.agent.control import SessionControl
+from app.agent.explorer import DEFAULT_OBJECTIVE
 from app.browser.profile import profile_dir_for
 from app.browser.session import BrowserConfig, BrowserSession
 from app.config import ModelSettings, Settings
@@ -87,12 +88,14 @@ class SessionManager:
 
     # ------------------------------------------------------------------ lifecycle
 
-    async def create(self, project: Project, objective: str) -> str:
+    async def create(self, project: Project, objective: str, mode: str = "objective") -> str:
         session_id = new_session_id()
         SessionStorage.create(self.sessions_dir, session_id)
+        if mode == "explore" and not objective.strip():
+            objective = DEFAULT_OBJECTIVE
         async with self.db.session() as db:
             await session_repo.create(db, session_id=session_id, project_id=project.id, objective=objective,
-                                      model=self.settings.model.executor.name)
+                                      model=self.settings.model.executor.name, mode=mode)
         return session_id
 
     async def start(self, session_id: str, project: Project) -> None:
@@ -113,7 +116,8 @@ class SessionManager:
         self.running[session_id] = running
         async with self.db.session() as db:
             await session_repo.set_status(db, session_id, "RUNNING", started_at=datetime.now(timezone.utc))
-        running.task = asyncio.create_task(self._run(running, project, row.objective), name=f"session {session_id}")
+        running.task = asyncio.create_task(self._run(running, project, row.objective, row.mode),
+                                           name=f"session {session_id}")
 
     async def pause(self, session_id: str) -> None:
         running = self._get(session_id)
@@ -218,7 +222,7 @@ class SessionManager:
 
     # ------------------------------------------------------------------ internals
 
-    async def _run(self, running: Running, project: Project, objective: str) -> None:
+    async def _run(self, running: Running, project: Project, objective: str, mode: str) -> None:
         session_id = running.session_id
         storage = SessionStorage(session_id, self.sessions_dir / session_id)
         final = "COMPLETED"
@@ -235,6 +239,7 @@ class SessionManager:
                 storage=storage,
                 control=running.control,
                 provider_factory=self.provider_factory,
+                mode=mode,
             )
         except asyncio.CancelledError:
             final = "CANCELLED"
@@ -265,6 +270,8 @@ class SessionManager:
             live["actions"] += 1
         elif kind == "bug_confirmed":
             live["bugs_found"] += 1
+        elif kind == "page_explored":
+            live["pages_explored"] = event["count"]
         self.hub.publish(running.session_id, event)
 
     async def _ask(self, running: Running, kind: str, message: str) -> bool:

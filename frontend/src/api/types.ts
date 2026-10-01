@@ -42,6 +42,7 @@ export interface LiveInfo {
   current_step: { sequence: number; goal: string } | null;
   actions: number;
   bugs_found: number;
+  pages_explored?: number;
   pending_confirmation: Pending | null;
 }
 
@@ -49,6 +50,7 @@ export interface Session {
   id: string;
   project_id: string;
   objective: string;
+  mode: "objective" | "explore";
   status: SessionStatus;
   outcome: Outcome | null;
   reason: string | null;
@@ -126,6 +128,16 @@ export interface Report {
   not_tested: { step: number; goal: string; status: string; reason: string }[];
   trace: string | null;
   test_data?: Record<string, string>;
+  exploration?: Exploration;
+}
+
+export interface Exploration {
+  pages_discovered: number;
+  pages_visited: number;
+  workflows_attempted: number;
+  workflows_completed: number;
+  pages: { url: string; title: string; status: number | null; error: string | null; fields: string[]; buttons: string[] }[];
+  workflows: { title: string; objective: string; outcome: string; steps: number }[];
 }
 
 export interface EvidenceFile {

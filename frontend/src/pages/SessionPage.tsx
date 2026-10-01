@@ -3,11 +3,11 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router";
 import { api, fetchFile } from "../api/client";
 import { isActive, useConfirm, useEvidence, useProjects, useReport, useSession, useSessionControl } from "../api/hooks";
-import type { AgentEvent, Pending, Report, SessionDetail, Step } from "../api/types";
+import type { AgentEvent, Exploration, Pending, Report, SessionDetail, Step } from "../api/types";
 import { ActivityFeed } from "../components/ActivityFeed";
 import { OutcomeBadge, SeverityBadge, StatusBadge } from "../components/Badges";
 import { StepList, type StepView } from "../components/StepList";
-import { duration } from "../format";
+import { duration, pathOf } from "../format";
 import { describeCriterion } from "../state/criteria";
 import { initialLive, reduceEvent, type LiveSession } from "../state/liveSession";
 import { useLiveSession } from "../state/useLiveSession";
@@ -110,6 +110,7 @@ function LiveView({ session: s, live }: { session: SessionDetail; live: LiveSess
             <Stat label="Steps" value={`${steps.filter((x) => x.status === "PASSED").length} / ${steps.filter((x) => x.status !== "REPLANNED").length || "…"}`} />
             <Stat label="Actions" value={String(s.live?.actions ?? live.activity.filter((a) => a.kind === "action").length)} />
             <Stat label="Bugs" value={String(live.bugs.length)} />
+            {s.mode === "explore" && <Stat label="Pages explored" value={String(s.live?.pages_explored ?? 0)} />}
             <Stat label="Elapsed" value={elapsed} />
           </div>
           <div className="row">
@@ -242,6 +243,8 @@ function Results({ session: s }: { session: SessionDetail }) {
         )}
       </section>
 
+      {r?.exploration && <ExplorationSection exploration={r.exploration} />}
+
       {r && (r.could_not_verify.length > 0 || r.not_tested.length > 0) && <NotVerified report={r} />}
 
       <div className="grid-2">
@@ -267,6 +270,45 @@ function stepView(step: Step): StepView {
     criteria: step.success_criteria.map((c) => ({ text: describeCriterion(c), grounded: c.grounded })),
     checks: step.checks.map((c) => ({ check: describeCriterion(c.criterion), passed: c.passed, detail: c.detail })),
   };
+}
+
+function ExplorationSection({ exploration: x }: { exploration: Exploration }) {
+  return (
+    <section className="card stack">
+      <h2>Exploration</h2>
+      <div className="stats">
+        <Stat label="Pages visited" value={`${x.pages_visited} of ${x.pages_discovered} found`} />
+        <Stat label="Workflows completed" value={`${x.workflows_completed} / ${x.workflows_attempted}`} />
+      </div>
+      {x.workflows.length > 0 && (
+        <table>
+          <thead><tr><th>Workflow</th><th>Result</th></tr></thead>
+          <tbody>
+            {x.workflows.map((w) => (
+              <tr key={w.title}>
+                <td><strong>{w.title}</strong><div className="small muted">{w.objective}</div></td>
+                <td>{w.outcome === "NOT_RUN" ? <span className="badge">Not run</span> : <OutcomeBadge outcome={w.outcome} />}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <details>
+        <summary>Pages ({x.pages.length})</summary>
+        <table style={{ marginTop: "0.5rem" }}>
+          <tbody>
+            {x.pages.map((p) => (
+              <tr key={p.url}>
+                <td><code>{pathOf(p.url)}</code></td>
+                <td>{p.title}</td>
+                <td>{p.status && p.status >= 400 ? <span className="badge bad">HTTP {p.status}</span> : <span className="muted small">{p.status ?? ""}</span>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </details>
+    </section>
+  );
 }
 
 function NotVerified({ report }: { report: Report }) {

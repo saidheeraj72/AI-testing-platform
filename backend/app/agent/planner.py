@@ -25,14 +25,20 @@ class Planner:
         self.model = model
         self.max_steps = max_steps
 
-    async def plan(self, objective: str, test_data: TestData, observation: Observation) -> list[Step]:
+    async def plan(self, objective: str, test_data: TestData, observation: Observation,
+                   first_sequence: int = 1, stated: str | None = None) -> list[Step]:
+        """`stated`: the text the user actually wrote, which grounds checks (default: the objective).
+
+        In exploration the objective is written by a model, so only the user's notes ground anything.
+        """
         messages = [
             Message("system", PLANNER_SYSTEM.format(max_steps=self.max_steps)),
             Message("user", f"OBJECTIVE: {objective}\nTEST DATA:\n{test_data.lines()}\n\n"
                             f"The browser is on the start page:\n{page_block(observation)}\n\nWrite the plan."),
         ]
         output = await self.model.generate(PlannerOutput, messages, purpose="plan", validate=self._validate)
-        return self._to_steps(output, objective, test_data, first_sequence=1)
+        return self._to_steps(output, objective if stated is None else stated, test_data,
+                              first_sequence=first_sequence)
 
     async def replan(
         self,
@@ -42,6 +48,7 @@ class Planner:
         failed: Step,
         remaining: list[Step],
         observation: Observation,
+        stated: str | None = None,
     ) -> list[Step]:
         done_text = "\n".join(f"  {s.sequence}. {s.goal}" for s in done) or "  (none)"
         messages = [
@@ -56,7 +63,8 @@ class Planner:
             )),
         ]
         output = await self.model.generate(PlannerOutput, messages, purpose="replan", validate=self._validate)
-        steps = self._to_steps(output, objective, test_data, first_sequence=failed.sequence + 1)
+        steps = self._to_steps(output, objective if stated is None else stated, test_data,
+                               first_sequence=failed.sequence + 1)
 
         # The objective's grounded checks must survive replanning, or the new plan could quietly skip them.
         kept = {c.key for s in steps for c in s.criteria}

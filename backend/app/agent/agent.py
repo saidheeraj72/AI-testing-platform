@@ -77,6 +77,9 @@ class TestAgent:
         confirm: ConfirmFn | None = None,
         control: SessionControl | None = None,
         ask_user: AskUserFn | None = None,
+        first_sequence: int = 1,
+        workflow: str | None = None,
+        stated: str | None = None,
     ):
         self.objective = objective
         self.browser = browser
@@ -90,6 +93,9 @@ class TestAgent:
         self.ask_user = ask_user
         self.control = control or SessionControl()
 
+        self.first_sequence = first_sequence  # exploration runs several agents in one session
+        self.workflow = workflow
+        self.stated = stated  # what the user wrote; grounds checks. None: the objective itself
         self.steps: list[Step] = []
         self.actions: list[ActionResult] = []
         self.replans_left = settings.agent.max_replans
@@ -103,7 +109,10 @@ class TestAgent:
         try:
             await self.browser.navigate(self.browser.scope.target_url)
             observation = await self.browser.observe()
-            self.steps = await self.planner.plan(self.objective, self.test_data, observation)
+            self.steps = await self.planner.plan(self.objective, self.test_data, observation, self.first_sequence,
+                                                 stated=self.stated)
+            for step in self.steps:
+                step.workflow = self.workflow
             self.emit({"type": "plan_created", "steps": [s.model_dump(mode="json") for s in self.steps]})
 
             index = 0
@@ -407,8 +416,10 @@ class TestAgent:
             index = self.steps.index(step)
             done = [s for s in self.steps[:index] if s.status == StepStatus.PASSED]
             new_steps = await self.planner.replan(
-                self.objective, self.test_data, done, step, self.steps[index + 1:], observation,
+                self.objective, self.test_data, done, step, self.steps[index + 1:], observation, stated=self.stated,
             )
+            for new_step in new_steps:
+                new_step.workflow = self.workflow
             self.steps[index + 1:] = new_steps
             self.emit({"type": "replanned", "after_step": step.sequence, "reason": reason,
                        "steps": [s.model_dump(mode="json") for s in new_steps]})

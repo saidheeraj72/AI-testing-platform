@@ -13,6 +13,7 @@ export default function NewTest() {
   const createSession = useCreateSession();
 
   const [url, setUrl] = useState("");
+  const [mode, setMode] = useState<"objective" | "explore">("objective");
   const [objective, setObjective] = useState("");
   const [name, setName] = useState("");
   const [keepLogin, setKeepLogin] = useState(true);
@@ -38,7 +39,7 @@ export default function NewTest() {
           allowed_domains: extraDomains.split(/[\s,]+/).filter(Boolean),
           persistent_profile: keepLogin,
         }));
-      const session = await createSession.mutateAsync({ project_id: project.id, objective: objective.trim() });
+      const session = await createSession.mutateAsync({ project_id: project.id, objective: objective.trim(), mode });
       navigate(`/sessions/${session.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -62,15 +63,37 @@ export default function NewTest() {
             The agent stays on this site (and its subdomains). For localhost, the port must match.
           </span>
         </label>
-        <label>
-          What should I test?
-          <textarea required minLength={3} rows={4} value={objective} onChange={(e) => setObjective(e.target.value)}
-                    placeholder='Log in with demo@example.com / password123. Create a customer and verify it appears in the customer list.' />
-          <span className="hint">
-            State exact expectations to have mismatches reported as bugs: quote texts ("Order confirmed") and give
-            paths (/login). Vaguer expectations are still checked, but a mismatch is reported as "could not verify".
-          </span>
-        </label>
+        <div className="row" role="radiogroup" aria-label="Kind of test">
+          <label className="inline">
+            <input type="radio" name="mode" checked={mode === "objective"} onChange={() => setMode("objective")} />
+            Test an objective
+          </label>
+          <label className="inline">
+            <input type="radio" name="mode" checked={mode === "explore"} onChange={() => setMode("explore")} />
+            Explore and find bugs
+          </label>
+        </div>
+        {mode === "objective" ? (
+          <label>
+            What should I test?
+            <textarea required minLength={3} rows={4} value={objective} onChange={(e) => setObjective(e.target.value)}
+                      placeholder='Log in with demo@example.com / password123. Create a customer and verify it appears in the customer list.' />
+            <span className="hint">
+              State exact expectations to have mismatches reported as bugs: quote texts ("Order confirmed") and give
+              paths (/login). Vaguer expectations are still checked, but a mismatch is reported as "could not verify".
+            </span>
+          </label>
+        ) : (
+          <label>
+            Notes (optional)
+            <textarea rows={2} value={objective} onChange={(e) => setObjective(e.target.value)}
+                      placeholder="Log in with demo@example.com / password123. Focus on the checkout." />
+            <span className="hint">
+              The agent follows the site's links to map it, then tests the main workflows it finds. It reports server
+              errors, broken links, crashes and failed checks. Give login details here if the site needs them.
+            </span>
+          </label>
+        )}
 
         {url && (existing ? (
           <ExistingProject project={existing} />

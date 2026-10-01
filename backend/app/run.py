@@ -26,6 +26,7 @@ from app.browser.observation import ObservationLimits
 from app.browser.profile import ProfileInUseError, profile_dir_for
 from app.browser.session import BrowserConfig, BrowserLaunchError, BrowserSession
 from app.agent.control import SessionControl
+from app.agent.explorer import DEFAULT_OBJECTIVE, Explorer
 from app.config import ConfigError, ModelSettings, Settings, load_settings
 from app.model.client import StructuredModel
 from app.model.provider import ModelProvider, create_provider
@@ -48,6 +49,7 @@ async def run_session(
     manifest_extra: dict[str, Any] | None = None,
     storage: SessionStorage | None = None,
     control: SessionControl | None = None,
+    mode: str = "objective",
     provider_factory: Callable[[ModelSettings], ModelProvider] = create_provider,
 ) -> tuple[SessionStorage, dict[str, Any]]:
     """Run a whole session. Always writes report.json and the trace, even when cancelled or failing.
@@ -64,6 +66,7 @@ async def run_session(
     storage.update_manifest(
         objective=objective,
         project=project,
+        mode=mode,
         model={"planner": settings.model.planner.name, "executor": settings.model.executor.name},
         test_data_tag=test_data.tag,
         **(manifest_extra or {}),
@@ -93,19 +96,33 @@ async def run_session(
         ask_user=ask_user,
     )
 
-    on_event({"type": "session_started", "session_id": storage.session_id, "url": url, "objective": objective})
+    explorer = Explorer(
+        notes=objective if objective.strip() != DEFAULT_OBJECTIVE else "", browser=browser,
+        planner_model=agent.planner.model, executor_model=agent.executor, settings=settings, budget=budget,
+        test_data=test_data, on_event=on_event, confirm=confirm, ask_user=ask_user, control=control,
+    ) if mode == "explore" else None
+    runner = explorer or agent
+
+    on_event({"type": "session_started", "session_id": storage.session_id, "url": url, "objective": objective,
+              "mode": mode})
     result = AgentResult(outcome="FAILED", reason="did not start", steps=[])
+    exploration_extra: dict[str, Any] = {}
     cancelled = False
     try:
         await browser.start()
-        result = await agent.run()
+        if explorer:
+            exploration = await explorer.run()
+            result, exploration_extra = exploration.agent, exploration.report_extra()
+        else:
+            result = await agent.run()
     except (BrowserLaunchError, ProfileInUseError) as e:
         result = AgentResult(outcome="FAILED", reason=str(e), steps=[])
     except asyncio.CancelledError:
         cancelled = True
-        agent.abort(StepStatus.COULD_NOT_VERIFY, "cancelled by the user")
-        result = AgentResult(outcome="CANCELLED", reason="cancelled by the user", steps=agent.steps,
-                             actions=agent.actions)
+        runner.abort(StepStatus.COULD_NOT_VERIFY, "cancelled by the user")
+        steps = [s for a in explorer.agents for s in a.steps] if explorer else agent.steps
+        actions = [x for a in explorer.agents for x in a.actions] if explorer else agent.actions
+        result = AgentResult(outcome="CANCELLED", reason="cancelled by the user", steps=steps, actions=actions)
         raise
     finally:
         await browser.stop()
@@ -123,8 +140,8 @@ async def run_session(
         report = build_report(
             session_id=storage.session_id, objective=objective, result=result, browser=browser,
             bugs=bugs, unconfirmed=unconfirmed, baseline_ignored=baseline_ignored,
-            extra={"test_data": test_data.model_dump(), "model_calls": budget.model_calls,
-                   "duration_ms": duration_ms},
+            extra={"mode": mode, "test_data": test_data.model_dump(), "model_calls": budget.model_calls,
+                   "duration_ms": duration_ms, **exploration_extra},
         )
         storage.write_json(storage.paths.report, report)
         storage.update_manifest(outcome=report["outcome"], duration_ms=duration_ms,
@@ -185,6 +202,10 @@ def print_event(event: dict[str, Any]) -> None:
         print(f"    {mark} {event['action']}{target}{err}")
     elif kind == "step_finished":
         print(f"  = {event['status']}: {event['reason']}\n")
+    elif kind == "page_explored":
+        print(f"  explored {event['count']}: {event['url']} ({event['title']})")
+    elif kind == "workflow_started":
+        print(f"\n=== Workflow: {event['title']}\n    {event['objective']}")
     elif kind == "waiting_for_user":
         print(f"    ⏸ {event['message']}")
     elif kind == "bug_confirmed":
@@ -219,7 +240,8 @@ async def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.run", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--url", required=True)
-    parser.add_argument("--objective", required=True)
+    parser.add_argument("--objective", help="what to test (with --explore: optional notes, e.g. credentials)")
+    parser.add_argument("--explore", action="store_true", help="explore the site and find bugs on its own")
     parser.add_argument("--project", help="persistent browser profile id (keeps logins)")
     parser.add_argument("--allow-domain", action="append", default=[], help="extra allowed domain, e.g. SSO")
     parser.add_argument("--config", type=Path, help="settings file (default: ai-tester.toml)")
@@ -237,9 +259,12 @@ async def main(argv: list[str] | None = None) -> int:
         settings.browser.headless = True
     if args.allow_risky:
         settings.safety.risky_actions = "allow"
+    if not args.objective and not args.explore:
+        parser.error("--objective is required unless --explore is given")
 
     _, report = await run_session(
-        url=args.url, objective=args.objective, settings=settings, project=args.project,
+        url=args.url, objective=args.objective or DEFAULT_OBJECTIVE, settings=settings, project=args.project,
+        mode="explore" if args.explore else "objective",
         allow_domains=args.allow_domain, on_event=print_event, confirm=terminal_confirm,
         ask_user=terminal_ask_user,
     )

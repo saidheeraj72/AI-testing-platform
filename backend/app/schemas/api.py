@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.safety.domain_scope import DomainScope, ScopeError
 
@@ -53,8 +53,15 @@ class ProjectOut(BaseModel):
 
 class SessionCreate(BaseModel):
     project_id: str
-    objective: str = Field(min_length=3, max_length=4000)
+    mode: Literal["objective", "explore"] = "objective"
+    objective: str = Field("", max_length=4000, description="explore mode: optional notes, e.g. credentials")
     start: bool = Field(True, description="start immediately")
+
+    @model_validator(mode="after")
+    def _objective_needed(self) -> SessionCreate:
+        if self.mode == "objective" and len(self.objective.strip()) < 3:
+            raise ValueError("objective is required (at least 3 characters)")
+        return self
 
 
 class SessionOut(BaseModel):
@@ -63,6 +70,7 @@ class SessionOut(BaseModel):
     id: str
     project_id: str
     objective: str
+    mode: str = "objective"
     status: str
     outcome: str | None
     reason: str | None

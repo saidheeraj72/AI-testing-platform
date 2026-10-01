@@ -57,7 +57,9 @@ def test_element_and_field():
     assert check(type="element_present", role="table", name="cart").passed
     assert not check(type="element_present", role="dialog").passed
     assert check(type="field_value", name="Name", value="John-typed").passed
-    assert not check(type="field_value", name="Email", value="x").passed
+    missing = check(type="field_value", name="Email", value="x")
+    assert not missing.passed and missing.inconclusive  # wrong page, not a lost value
+    assert check(type="field_value", name="Email", value="x", negate=True).inconclusive
 
 
 def test_request_succeeded_separates_app_errors_from_missing_requests():

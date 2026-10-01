@@ -130,6 +130,23 @@ export function reduceEvent(state: LiveSession, e: AgentEvent): LiveSession {
       log("confirm", text, { ok: e.allowed as boolean });
       break;
     }
+    case "page_explored": {
+      const status = e.status as number | null;
+      log("action", `Explored ${pathOnly(e.url as string)}: ${e.title}`, {
+        ok: status === null || status < 400,
+        detail: status !== null && status >= 400 ? `HTTP ${status}` : undefined,
+      });
+      break;
+    }
+    case "workflows_proposed":
+      log("info", `Workflows to test: ${(e.workflows as { title: string }[]).map((w) => w.title).join(", ") || "none"}`);
+      break;
+    case "workflow_started":
+      log("step", `Workflow: ${e.title}`, { detail: e.objective as string });
+      break;
+    case "workflow_finished":
+      log("info", `Workflow "${e.title}" finished: ${e.outcome}`);
+      break;
     case "paused":
       s.paused = true;
       log("info", "Paused. You have control of the browser.");
@@ -160,4 +177,12 @@ export function reduceEvent(state: LiveSession, e: AgentEvent): LiveSession {
       break;
   }
   return s;
+}
+
+function pathOnly(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url;
+  }
 }

@@ -285,7 +285,8 @@ class BrowserSession:
 
     # ------------------------------------------------------------------ actions
 
-    async def navigate(self, url: str) -> ActionResult:
+    async def navigate(self, url: str, *, from_link: bool = False) -> ActionResult:
+        """Open `url`. from_link: the URL came from a link on the site (a 404 then means a broken link)."""
         async def body(result: ActionResult) -> None:
             base = self.page.url if self.page.url.startswith("http") else self.scope.target_url
             absolute = urljoin(base, url)
@@ -300,7 +301,7 @@ class BrowserSession:
                 raise _Failure(ActionError.NAVIGATION_FAILED, _first_line(e)) from None
             result.http_status = response.status if response else None
 
-        return await self._run("navigate", {"url": url}, body)
+        return await self._run("navigate", {"url": url, **({"from_link": True} if from_link else {})}, body)
 
     async def click(self, ref: str) -> ActionResult:
         async def body(result: ActionResult) -> None:

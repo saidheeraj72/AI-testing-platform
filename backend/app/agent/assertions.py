@@ -16,6 +16,7 @@ from app.browser.snapshot import Node
 from app.schemas.plan import CheckResult, Criterion
 
 EDITABLE_ROLES = frozenset({"textbox", "searchbox", "spinbutton", "combobox", "slider"})
+NO_FIELD = "no field named"
 _NUMBER = re.compile(r"-?\d{1,3}(?:,\d{3})+(?:\.\d+)?|-?\d+(?:\.\d+)?")
 
 
@@ -40,6 +41,10 @@ def needs_verify_args(criterion: Criterion) -> bool:
 
 def evaluate(criterion: Criterion, page: PageState, args: VerifyArgs | None = None) -> CheckResult:
     passed, detail, app_error = _CHECKS[criterion.type](criterion, page, args or VerifyArgs())
+    # A field check on a page without that field says the agent is on the wrong page, not that the app
+    # lost data: it can neither pass nor become a bug.
+    if criterion.type == "field_value" and detail.startswith(NO_FIELD):
+        return CheckResult(criterion=criterion, passed=False, detail=detail, inconclusive=True)
     if criterion.negate and criterion.type not in ("request_succeeded", "sum_equals"):
         passed = not passed
     return CheckResult(criterion=criterion, passed=passed, detail=detail, app_error=app_error)
@@ -73,7 +78,7 @@ def _field_value(c: Criterion, page: PageState, _) -> tuple[bool, str, bool]:
     name = _norm(c.name or "")
     fields = [n for root in page.nodes for n in root.walk() if n.role in EDITABLE_ROLES and name in _norm(n.name)]
     if not fields:
-        return False, f"no field named {c.name!r}", False
+        return False, f"{NO_FIELD} {c.name!r}", False
     value = fields[0].text or ""
     return _norm(value) == _norm(c.value or ""), f"field {fields[0].name!r} has value {value!r}", False
 

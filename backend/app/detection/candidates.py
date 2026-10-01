@@ -31,7 +31,7 @@ def detect(
 ) -> tuple[list[Candidate], Baseline]:
     by_seq = {a.sequence: a for a in actions}
 
-    http = [(s, e) for s, e in http_signals(network) if not _agent_typed_url(s, e, by_seq)]
+    http = [(_broken_link(s, e, by_seq), e) for s, e in http_signals(network) if not _agent_typed_url(s, e, by_seq)]
     logs = console_signals(console, scope)
     checks = assertion_signals(steps)
 
@@ -77,12 +77,24 @@ def detect(
 
 
 def _agent_typed_url(signal: Signal, event: NetworkEvent, actions: dict[int, ActionResult]) -> bool:
-    """A missing page the agent reached by typing a guessed URL is not an application bug."""
+    """A missing page the agent reached by typing a guessed URL is not an application bug.
+
+    A URL taken from a link the site itself shows is different: that 404 is a broken link.
+    """
     action = actions.get(event.action_seq)
     return (
         event.resource_type == "document" and signal.kind == "http_error" and not signal.strong
-        and action is not None and action.action == "navigate"
+        and action is not None and action.action == "navigate" and not action.arguments.get("from_link")
     )
+
+
+def _broken_link(signal: Signal, event: NetworkEvent, actions: dict[int, ActionResult]) -> Signal:
+    """A link the site itself shows that leads to an error page is a broken link: a strong signal."""
+    action = actions.get(event.action_seq)
+    if (event.resource_type == "document" and signal.kind == "http_error" and not signal.strong
+            and action is not None and action.arguments.get("from_link")):
+        return signal.model_copy(update={"strong": True, "summary": f"Broken link: {signal.summary}"})
+    return signal
 
 
 def _step_for(seq: int, steps: list[Step]) -> Step | None:

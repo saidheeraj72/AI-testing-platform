@@ -54,6 +54,8 @@ class AgentSettings(_Strict):
     max_duration_seconds: float = Field(900, gt=0)
     observation_max_chars: int = Field(6000, ge=1000)
     max_analyzer_calls: int = Field(12, ge=0)  # separate from max_model_calls; 0 disables AI analysis
+    explore_max_pages: int = Field(15, ge=1)    # exploration: pages crawled by following links
+    explore_workflows: int = Field(3, ge=0)     # exploration: workflows proposed and tested
 
 
 class BrowserSettings(_Strict):

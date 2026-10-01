@@ -84,7 +84,7 @@ export function useLoginSetup(projectId: string | undefined) {
 export function useCreateSession() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { project_id: string; objective: string }) =>
+    mutationFn: (body: { project_id: string; objective: string; mode: "objective" | "explore" }) =>
       api<Session>("/api/sessions", { method: "POST", body }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["sessions"] }),
   });

@@ -93,6 +93,7 @@ class CheckResult(BaseModel):
 class Step(BaseModel):
     sequence: int
     goal: str
+    workflow: str | None = None  # exploration: the workflow this step belongs to
     criteria: list[Criterion]
     status: StepStatus = StepStatus.PENDING
     reason: str = ""

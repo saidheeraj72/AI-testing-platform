@@ -2,7 +2,7 @@
 
 A local AI agent that tests a website in a real, visible browser and writes a bug report you can trust.
 
-**Status: Phase 6 (human takeover and login) done.**
+**Status: Phases 0–6 and 9 done.** Next: Chrome extension (8), then desktop packaging (7).
 
 | Phase | Scope | Status |
 |---|---|---|
@@ -14,6 +14,8 @@ A local AI agent that tests a website in a real, visible browser and writes a bu
 | 5 | React UI | done |
 | 6 | Human takeover and auth polish | done |
 | 7 | Tauri packaging | |
+| 8 | Chrome extension | next |
+| 9 | Autonomous exploration | done |
 
 ## Setup
 
@@ -178,6 +180,23 @@ SEEDED_APP_URL=http://localhost:3000 uv run pytest         # also the seeded-app
 - **Unchecked steps.** Intermediate steps the planner couldn't write a usable check for complete on the executor's word, after at least one action, and the report marks them. The last step must always have code-evaluated checks.
 - **Recovery.** A step that stalls (the action limit, the same action repeated three times, or the page not changing) is replanned from the current page. Grounded checks are carried into the new plan. After a step that did not pass, the rest are `SKIPPED`.
 - **Session outcome:** `PASS`, `BUGS_FOUND`, `COULD_NOT_VERIFY`, `BLOCKED`, `FAILED` or `CANCELLED`, written to `report.json`. Every model call, with its prompt, response, latency and validation errors, goes to `model_calls.jsonl`.
+
+## Exploration mode
+
+Choose **Explore and find bugs** in the UI, or run `uv run python -m app.run --explore --url … [--objective "Log in with …"]`, to test a site without a specific objective:
+
+1. **Log in.** If the start page is a login form, the agent logs in using the credentials from your notes. Without credentials, it asks you to log in.
+2. **Crawl.** In code, it follows the site's own links breadth-first, up to `explore_max_pages`. It never follows "Log out", "Delete" and similar links.
+3. **Workflows.** The model proposes `explore_workflows` workflows from the site map (creating records, forms, cart, settings…), and each one runs as an ordinary test.
+
+Exploration reports **evidence**: server errors, broken links (a link the site shows that leads to an error page), uncaught exceptions and failed requests. Workflow objectives are written by the model, not by you, so a failed check inside one is *could not verify*, never a bug. To check what the app *should* do, use objective mode with stated expectations. The report adds pages discovered and visited, and workflows attempted and completed.
+
+On the seeded app (`gemma4:cloud`):
+
+| App | Runs | Result | False positives |
+|---|---|---|---|
+| clean | 3 | PASS 3 / 3 | 0 |
+| buggy | 2 | found the HTTP 500 in 2 / 2 | 0 |
 
 ## When the agent needs you
 

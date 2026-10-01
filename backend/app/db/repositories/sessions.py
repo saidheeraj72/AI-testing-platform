@@ -14,8 +14,9 @@ from app.storage.manager import SessionStorage
 ACTIVE_STATUSES = ("RUNNING", "PAUSED", "WAITING_FOR_USER")
 
 
-async def create(db: AsyncSession, *, session_id: str, project_id: str, objective: str, model: str) -> Session:
-    row = Session(id=session_id, project_id=project_id, objective=objective, status="CREATED", model=model)
+async def create(db: AsyncSession, *, session_id: str, project_id: str, objective: str, model: str,
+                 mode: str = "objective") -> Session:
+    row = Session(id=session_id, project_id=project_id, objective=objective, status="CREATED", model=model, mode=mode)
     db.add(row)
     await db.commit()
     return row
