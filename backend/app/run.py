@@ -16,7 +16,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from app.agent.agent import AgentResult, ConfirmFn, EventSink, TestAgent
+from app.agent.agent import AgentResult, AskUserFn, ConfirmFn, EventSink, TestAgent
 from app.agent.budgets import SessionBudget
 from app.agent.test_data import TestData
 from app.agent.budgets import BudgetExceeded
@@ -44,6 +44,7 @@ async def run_session(
     sessions_dir: Path | None = None,
     on_event: EventSink = lambda e: None,
     confirm: ConfirmFn | None = None,
+    ask_user: AskUserFn | None = None,
     manifest_extra: dict[str, Any] | None = None,
     storage: SessionStorage | None = None,
     control: SessionControl | None = None,
@@ -89,6 +90,7 @@ async def run_session(
         on_event=on_event,
         confirm=confirm,
         control=control,
+        ask_user=ask_user,
     )
 
     on_event({"type": "session_started", "session_id": storage.session_id, "url": url, "objective": objective})
@@ -183,6 +185,8 @@ def print_event(event: dict[str, Any]) -> None:
         print(f"    {mark} {event['action']}{target}{err}")
     elif kind == "step_finished":
         print(f"  = {event['status']}: {event['reason']}\n")
+    elif kind == "waiting_for_user":
+        print(f"    ⏸ {event['message']}")
     elif kind == "bug_confirmed":
         print(f"  ! {event['id']} [{event['severity']}] {event['title']}")
     elif kind == "session_completed":
@@ -193,6 +197,14 @@ def print_event(event: dict[str, Any]) -> None:
 def _criterion_text(c: dict[str, Any]) -> str:
     crit = Criterion(**c)
     return crit.describe() + ("" if crit.grounded else " [guess]")
+
+
+async def terminal_ask_user(kind: str, message: str) -> bool:
+    if not sys.stdin.isatty():
+        print(f"    ! Needs a person ({kind}), but there is no terminal to ask: {message}")
+        return False
+    answer = await asyncio.to_thread(input, f"    ? {message}\n      Press Enter to continue, or type 'skip': ")
+    return answer.strip().lower() != "skip"
 
 
 async def terminal_confirm(action: str) -> bool:
@@ -229,6 +241,7 @@ async def main(argv: list[str] | None = None) -> int:
     _, report = await run_session(
         url=args.url, objective=args.objective, settings=settings, project=args.project,
         allow_domains=args.allow_domain, on_event=print_event, confirm=terminal_confirm,
+        ask_user=terminal_ask_user,
     )
     for bug in report["bugs"]:
         print(f"\n{bug['id']} [{bug['severity']}] {bug['title']}\n  expected: {bug['expected']}\n"

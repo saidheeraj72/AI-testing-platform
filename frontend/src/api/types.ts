@@ -42,7 +42,7 @@ export interface LiveInfo {
   current_step: { sequence: number; goal: string } | null;
   actions: number;
   bugs_found: number;
-  pending_confirmation: { id: string; action: string } | null;
+  pending_confirmation: Pending | null;
 }
 
 export interface Session {
@@ -148,4 +148,11 @@ export interface AgentEvent {
   session_id: string;
   type: string;
   [key: string]: unknown;
+}
+
+/** Something the user must answer: a risky action, or a hand-over (login, MFA, CAPTCHA, agent request). */
+export interface Pending {
+  id: string;
+  kind: "risky_action" | "login_required" | "mfa" | "captcha" | "agent_request" | string;
+  action: string;
 }

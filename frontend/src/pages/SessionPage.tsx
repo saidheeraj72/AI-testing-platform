@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router";
 import { api, fetchFile } from "../api/client";
 import { isActive, useConfirm, useEvidence, useProjects, useReport, useSession, useSessionControl } from "../api/hooks";
-import type { AgentEvent, Report, SessionDetail, Step } from "../api/types";
+import type { AgentEvent, Pending, Report, SessionDetail, Step } from "../api/types";
 import { ActivityFeed } from "../components/ActivityFeed";
 import { OutcomeBadge, SeverityBadge, StatusBadge } from "../components/Badges";
 import { StepList, type StepView } from "../components/StepList";
@@ -143,9 +143,31 @@ function LiveView({ session: s, live }: { session: SessionDetail; live: LiveSess
   );
 }
 
-function ConfirmBanner({ sessionId, pending }: { sessionId: string; pending: { id: string; action: string } }) {
+const HAND_OVER_TITLE: Record<string, string> = {
+  login_required: "Please log in.",
+  mfa: "A verification code is needed.",
+  captcha: "A CAPTCHA needs a person.",
+  agent_request: "The agent asks for your help.",
+};
+
+function ConfirmBanner({ sessionId, pending }: { sessionId: string; pending: Pending }) {
   const confirm = useConfirm(sessionId);
   const answer = (allow: boolean) => confirm.mutate({ confirmation_id: pending.id, allow });
+  if (pending.kind !== "risky_action") {
+    return (
+      <div className="banner warn" role="alert">
+        <div>
+          <strong>{HAND_OVER_TITLE[pending.kind] ?? "The agent needs you."}</strong> {pending.action}
+          <div className="small">The agent waits and does not touch the browser. It reads the page again when you
+            continue.</div>
+        </div>
+        <div className="row">
+          <button onClick={() => answer(true)} disabled={confirm.isPending}>Continue</button>
+          <button className="secondary" onClick={() => answer(false)} disabled={confirm.isPending}>Skip this step</button>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="banner warn" role="alert">
       <div>

@@ -245,6 +245,11 @@ class BrowserSession:
         return self.storage.relative(path)
 
     @property
+    def closed(self) -> bool:
+        """The user closed the browser window, or the session stopped."""
+        return self._context_closed or self._stopped
+
+    @property
     def action_count(self) -> int:
         return self._action_seq
 

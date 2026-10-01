@@ -56,6 +56,31 @@ export function useCreateProject() {
   });
 }
 
+export function useUpdateProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: { id: string; allowed_domains?: string[]; name?: string }) =>
+      api<Project>(`/api/projects/${id}`, { method: "PATCH", body }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["projects"] }),
+  });
+}
+
+export function useLoginSetup(projectId: string | undefined) {
+  const qc = useQueryClient();
+  const key = ["login", projectId];
+  const status = useQuery({
+    queryKey: key,
+    queryFn: () => api<{ open: boolean }>(`/api/projects/${projectId}/login`),
+    enabled: !!projectId,
+  });
+  const action = useMutation({
+    mutationFn: (step: "open" | "finish") =>
+      api<{ open: boolean }>(`/api/projects/${projectId}/login${step === "finish" ? "/finish" : ""}`, { method: "POST" }),
+    onSuccess: (data) => qc.setQueryData(key, data),
+  });
+  return { open: status.data?.open ?? false, action };
+}
+
 export function useCreateSession() {
   const qc = useQueryClient();
   return useMutation({

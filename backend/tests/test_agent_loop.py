@@ -65,7 +65,7 @@ def settings(**agent) -> Settings:
     return s
 
 
-async def run_agent(site, tmp_path, script: list[Reply], objective="Test the form", **agent_settings):
+async def run_agent(site, tmp_path, script: list[Reply], objective="Test the form", ask_user=None, **agent_settings):
     cfg = settings(**agent_settings)
     storage = SessionStorage.create(tmp_path / "sessions")
     provider = ScriptedProvider(cfg.model.executor, script)
@@ -77,7 +77,7 @@ async def run_agent(site, tmp_path, script: list[Reply], objective="Test the for
     budget = SessionBudget(cfg.agent)
     model = StructuredModel(provider, storage, before_call=budget.before_model_call)
     agent = TestAgent(objective=objective, browser=browser, planner_model=model, executor_model=model,
-                      settings=cfg, budget=budget, test_data=TestData.generate("qa1"))
+                      settings=cfg, budget=budget, test_data=TestData.generate("qa1"), ask_user=ask_user)
     try:
         result = await agent.run()
     finally:
@@ -273,3 +273,43 @@ async def test_repeating_an_unrelated_action_is_just_stuck(site, tmp_path):
         *[act("click", 'button "Save"') for _ in range(3)],
     ], objective="Open the report and verify the app goes to /page2", max_replans=0)
     assert result.steps[0].status == StepStatus.COULD_NOT_VERIFY
+
+
+async def test_agent_can_ask_the_user_and_continue(site, tmp_path):
+    asked = []
+
+    async def ask_user(kind, message):
+        asked.append((kind, message))
+        return True
+
+    result, _, _ = await run_agent(site, tmp_path, [
+        plan(("Go to page two", [{"type": "url_contains", "value": "/page2"}])),
+        {"reasoning": "Please open the link from the e-mail", "action": "ask_user"},
+        act("click", 'link "Page two"'),
+    ], ask_user=ask_user)
+    assert asked == [("agent_request", "Please open the link from the e-mail")]
+    assert result.outcome == "PASS"
+
+
+async def test_without_a_person_a_hand_over_blocks_the_step(site, tmp_path):
+    result, _, _ = await run_agent(site, tmp_path, [
+        plan(("Go to page two", [{"type": "url_contains", "value": "/page2"}])),
+        {"reasoning": "Please open the e-mail link", "action": "ask_user"},
+    ])
+    assert result.steps[0].status == StepStatus.BLOCKED and result.outcome == "BLOCKED"
+
+
+async def test_captcha_goes_to_a_person_before_the_model_sees_it(site, tmp_path):
+    asked = []
+
+    async def ask_user(kind, message):
+        asked.append(kind)
+        return False  # the person skips it
+
+    result, provider, _ = await run_agent(site, tmp_path, [
+        plan(("Open the captcha page", [{"type": "url_contains", "value": "/page2"}])),
+        act("navigate", url="/captcha"),
+    ], ask_user=ask_user)
+    assert asked == ["captcha"]
+    assert len(provider.prompts) == 2  # plan + the navigate; never asked about the CAPTCHA itself
+    assert result.steps[0].status == StepStatus.BLOCKED

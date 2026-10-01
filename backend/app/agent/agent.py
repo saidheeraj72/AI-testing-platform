@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.agent.assertions import PageState, VerifyArgs, evaluate, needs_verify_args
+from app.agent.blockers import detect_blocker
 from app.agent.budgets import BudgetExceeded, SessionBudget
 from app.agent.control import SessionControl
 from app.agent.decision import Decision, validator_for
@@ -43,6 +44,7 @@ log = logging.getLogger(__name__)
 
 EventSink = Callable[[dict[str, Any]], None]
 ConfirmFn = Callable[[str], Awaitable[bool]]
+AskUserFn = Callable[[str, str], Awaitable[bool]]  # (kind, message) -> continue?
 RECENT_ACTIONS = 6
 
 
@@ -74,6 +76,7 @@ class TestAgent:
         on_event: EventSink = lambda e: None,
         confirm: ConfirmFn | None = None,
         control: SessionControl | None = None,
+        ask_user: AskUserFn | None = None,
     ):
         self.objective = objective
         self.browser = browser
@@ -84,6 +87,7 @@ class TestAgent:
         self.test_data = test_data
         self.emit = on_event
         self.confirm = confirm
+        self.ask_user = ask_user
         self.control = control or SessionControl()
 
         self.steps: list[Step] = []
@@ -198,6 +202,11 @@ class TestAgent:
                 if errors := [r for r in results if r.app_error]:
                     self._end(step, StepStatus.FAILED, results, errors[0].detail)
 
+            # CAPTCHAs, MFA codes and logins without credentials go to a person, before the model sees them.
+            if blocker := detect_blocker(self.browser.last_nodes, self.objective):
+                await self._hand_to_user(step, blocker.kind, blocker.message)
+                continue
+
             if acted >= cfg.max_actions_per_step:
                 await self._unfinished(step, f"not done after {acted} actions", observation)
 
@@ -231,6 +240,10 @@ class TestAgent:
 
             if decision.action == "give_up":
                 await self._unfinished(step, f"agent gave up: {decision.reasoning}", observation)
+
+            if decision.action == "ask_user":
+                await self._hand_to_user(step, "agent_request", decision.reasoning)
+                continue
 
             feedback = await self._act(step, decision, observation)
             acted += 1
@@ -351,6 +364,15 @@ class TestAgent:
         if results:
             step.checks = results
         raise _StepEnded
+
+    async def _hand_to_user(self, step: Step, kind: str, message: str) -> None:
+        """Wait for a person to do something in the browser. Returns when they continue; ends the step if not."""
+        if self.ask_user is None:
+            self._end(step, StepStatus.BLOCKED, [], f"needs a person ({kind}): {message}")
+        self.emit({"type": "waiting_for_user", "step": step.sequence, "kind": kind, "message": message})
+        if not await self.ask_user(kind, message):
+            self._end(step, StepStatus.BLOCKED, [], f"skipped by the user ({kind}): {message}")
+        self.loops.reset()  # the person changed the page; earlier repetition no longer counts
 
     async def _app_ignored(self, step: Step, repeated: ActionResult) -> None:
         """The agent kept doing exactly what the step says, it worked each time, and nothing happened.

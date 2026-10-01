@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from app.schemas.observation import Observation
 
 ActionName = Literal[
-    "click", "type", "select", "press", "scroll", "navigate", "go_back", "wait", "verify", "give_up",
+    "click", "type", "select", "press", "scroll", "navigate", "go_back", "wait", "verify", "give_up", "ask_user",
 ]
 
 
@@ -49,5 +49,7 @@ def validator_for(observation: Observation):
             raise ValueError("'scroll' needs 'direction'")
         if d.action == "navigate" and not d.url:
             raise ValueError("'navigate' needs 'url'")
+        if d.action == "ask_user" and not d.reasoning.strip():
+            raise ValueError("'ask_user' needs 'reasoning' saying what the person should do")
 
     return validate

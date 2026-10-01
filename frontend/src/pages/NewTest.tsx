@@ -1,6 +1,6 @@
 import { useMemo, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router";
-import { useCreateProject, useCreateSession, useProjects, useSessions } from "../api/hooks";
+import { useCreateProject, useCreateSession, useLoginSetup, useProjects, useSessions, useUpdateProject } from "../api/hooks";
 import type { Project } from "../api/types";
 import { OutcomeBadge, StatusBadge } from "../components/Badges";
 
@@ -73,7 +73,7 @@ export default function NewTest() {
         </label>
 
         {url && (existing ? (
-          <p className="small muted">Project: <strong>{existing.name}</strong>{existing.persistent_profile ? " · keeps its login between tests" : ""}</p>
+          <ExistingProject project={existing} />
         ) : (
           <details>
             <summary>New project options</summary>
@@ -102,6 +102,44 @@ export default function NewTest() {
         </div>
       </form>
       <RecentSessions />
+    </div>
+  );
+}
+
+function ExistingProject({ project }: { project: Project }) {
+  const login = useLoginSetup(project.persistent_profile ? project.id : undefined);
+  const update = useUpdateProject();
+  const [domains, setDomains] = useState(project.allowed_domains.join(", "));
+  return (
+    <div className="stack">
+      <div className="row small muted">
+        <span>Project: <strong>{project.name}</strong></span>
+        {project.persistent_profile && <span>· keeps its login between tests</span>}
+        {project.persistent_profile && !login.open && (
+          <button type="button" className="link" onClick={() => login.action.mutate("open")}
+                  disabled={login.action.isPending}>Set up login</button>
+        )}
+      </div>
+      {login.open && (
+        <div className="banner info" role="status">
+          <div><strong>A Chrome window is open for this project.</strong> Log in there, then click Done. Later tests
+            start logged in.</div>
+          <button type="button" onClick={() => login.action.mutate("finish")} disabled={login.action.isPending}>Done</button>
+        </div>
+      )}
+      {login.action.isError && <div className="error-box">{login.action.error.message}</div>}
+      <details>
+        <summary className="small">Extra allowed domains</summary>
+        <div className="row" style={{ marginTop: "0.5rem" }}>
+          <input style={{ flex: 1 }} value={domains} onChange={(e) => setDomains(e.target.value)}
+                 placeholder="login.microsoftonline.com" aria-label="Extra allowed domains" />
+          <button type="button" className="secondary" disabled={update.isPending}
+                  onClick={() => update.mutate({ id: project.id, allowed_domains: domains.split(/[\s,]+/).filter(Boolean) })}>
+            Save
+          </button>
+        </div>
+        <p className="hint">Sites the agent may visit besides the target, such as a single sign-on provider.</p>
+      </details>
     </div>
   );
 }

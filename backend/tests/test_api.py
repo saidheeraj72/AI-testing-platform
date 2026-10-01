@@ -19,7 +19,7 @@ ORIGIN = "http://localhost:5173"
 
 
 async def fake_runner(*, url, objective, settings, project, allow_domains, on_event, confirm, storage: SessionStorage,
-                      control, provider_factory):
+                      control, provider_factory, ask_user):
     """Stands in for run_session: emits events, honours pause/confirm/cancel, writes a report."""
     on_event({"type": "session_started", "session_id": storage.session_id, "url": url, "objective": objective})
     on_event({"type": "plan_created", "steps": [{"sequence": 1}, {"sequence": 2}]})
@@ -28,6 +28,8 @@ async def fake_runner(*, url, objective, settings, project, allow_domains, on_ev
     allowed = None
     if "risky" in objective:
         allowed = await confirm('clicking button "Delete everything"')
+    if "login wall" in objective:
+        allowed = await ask_user("login_required", "Log in in the Chrome window, then click Continue.")
     try:
         if "slow" in objective:
             for _ in range(200):
@@ -81,7 +83,7 @@ def make_client(tmp_path):
 
     def make(runner=fake_runner, **kwargs):
         app = create_app(load_settings(), token=TOKEN, db_path=tmp_path / "app.db", session_root=tmp_path / "sessions",
-                         runner=runner, extra_hosts=frozenset({"testserver"}), **kwargs)
+                         runner=runner, extra_hosts=frozenset({"testserver"}), login_headless=True, **kwargs)
         client = TestClient(app, headers=AUTH)
         client.__enter__()
         clients.append(client)
@@ -133,9 +135,10 @@ def test_foreign_origin_is_rejected(client):
     assert client.get("/api/projects", headers={"Origin": ORIGIN}).status_code == 200
 
 
-def test_cors_preflight_for_the_ui(client):
-    r = client.options("/api/projects", headers={
-        "Origin": ORIGIN, "Access-Control-Request-Method": "POST",
+@pytest.mark.parametrize("method", ["GET", "POST", "PATCH"])  # every method the UI uses
+def test_cors_preflight_for_the_ui(client, method):
+    r = client.options("/api/projects/p_x", headers={
+        "Origin": ORIGIN, "Access-Control-Request-Method": method,
         "Access-Control-Request-Headers": "x-ai-tester-token,content-type"})
     assert r.status_code == 200
     assert r.headers["access-control-allow-origin"] == ORIGIN
@@ -218,11 +221,45 @@ def test_risky_action_waits_for_the_user(client, allow, outcome):
     sid = client.post("/api/sessions", json={"project_id": pid, "objective": "risky run"}).json()["id"]
     s = wait_until(client, sid, done=lambda s: s["status"] == "WAITING_FOR_USER")
     pending = s["live"]["pending_confirmation"]
-    assert "Delete everything" in pending["action"]
+    assert "Delete everything" in pending["action"] and pending["kind"] == "risky_action"
 
     assert client.post(f"/api/sessions/{sid}/confirm", json={"confirmation_id": "nope", "allow": True}).status_code == 409
     assert client.post(f"/api/sessions/{sid}/confirm", json={"confirmation_id": pending["id"], "allow": allow}).json()
     assert wait_until(client, sid)["outcome"] == outcome
+
+
+@pytest.mark.parametrize("cont, outcome", [(True, "BUGS_FOUND"), (False, "BLOCKED")])
+def test_hand_over_to_the_user(client, cont, outcome):
+    pid = project(client)
+    sid = client.post("/api/sessions", json={"project_id": pid, "objective": "login wall run"}).json()["id"]
+    s = wait_until(client, sid, done=lambda s: s["status"] == "WAITING_FOR_USER")
+    pending = s["live"]["pending_confirmation"]
+    assert pending["kind"] == "login_required" and "Log in" in pending["action"]
+    client.post(f"/api/sessions/{sid}/confirm", json={"confirmation_id": pending["id"], "allow": cont})
+    assert wait_until(client, sid)["outcome"] == outcome
+
+
+def test_update_project(client):
+    pid = project(client)
+    r = client.patch(f"/api/projects/{pid}", json={"allowed_domains": ["login.example.com"]})
+    assert r.json()["allowed_domains"] == ["login.example.com"]
+    assert client.patch("/api/projects/p_none", json={"name": "x"}).status_code == 404
+
+
+@pytest.mark.browser
+def test_login_setup_opens_and_closes_the_profile_browser(client, site):
+    pid = project(client, url=site)
+    assert client.post(f"/api/projects/{pid}/login").json() == {"open": True}
+    assert client.get(f"/api/projects/{pid}/login").json() == {"open": True}
+    assert client.post(f"/api/projects/{pid}/login").status_code == 409
+    r = client.post("/api/sessions", json={"project_id": pid, "objective": "During login"})
+    assert r.status_code == 409 and "login browser" in r.json()["detail"]
+    assert client.post(f"/api/projects/{pid}/login/finish").json() == {"open": False}
+    assert client.get(f"/api/projects/{pid}/login").json() == {"open": False}
+    assert client.post(f"/api/projects/{pid}/login/finish").status_code == 409
+
+    no_profile = client.post("/api/projects", json={"name": "x", "target_url": site, "persistent_profile": False})
+    assert client.post(f"/api/projects/{no_profile.json()['id']}/login").status_code == 409
 
 
 def test_websocket_replays_and_streams_until_the_end(client):

@@ -42,7 +42,7 @@ describe("reduceEvent", () => {
 
   it("handles confirmation, pause and completion", () => {
     let s = run(ev("confirmation_required", { confirmation_id: "c1", action: "clicking Delete" }));
-    expect(s.pendingConfirmation).toEqual({ id: "c1", action: "clicking Delete" });
+    expect(s.pendingConfirmation).toEqual({ id: "c1", kind: "risky_action", action: "clicking Delete" });
     s = [ev("confirmation_answered", { allowed: false }), ev("paused")].reduce(reduceEvent, s);
     expect(s.pendingConfirmation).toBeNull();
     expect(s.paused).toBe(true);
@@ -50,6 +50,20 @@ describe("reduceEvent", () => {
          ev("session_completed", { outcome: "BUGS_FOUND", reason: "" }), ev("session_saved")].reduce(reduceEvent, s);
     expect(s.bugs).toHaveLength(1);
     expect([s.outcome, s.finished]).toEqual(["BUGS_FOUND", true]);
+  });
+
+  it("labels hand-overs differently from risky actions", () => {
+    const s = run(
+      ev("confirmation_required", { confirmation_id: "c2", kind: "login_required", action: "Log in, then Continue." }),
+      ev("confirmation_answered", { allowed: false }),
+    );
+    expect(s.activity.map((a) => a.text)).toEqual(["Needs you: Log in, then Continue.", "You skipped this step"]);
+  });
+
+  it("explains blocked navigation", () => {
+    const s = run(ev("action_completed", { action: "click", ok: false, target: null, error: "BLOCKED_NAVIGATION",
+                                          message: "outside the test scope" }));
+    expect(s.activity[0].detail).toContain("extra allowed domains");
   });
 
   it("ignores replayed events after a reconnect", () => {

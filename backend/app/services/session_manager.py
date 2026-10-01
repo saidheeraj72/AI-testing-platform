@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
+import shutil
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -16,12 +17,15 @@ from pathlib import Path
 from typing import Any
 
 from app.agent.control import SessionControl
+from app.browser.profile import profile_dir_for
+from app.browser.session import BrowserConfig, BrowserSession
 from app.config import ModelSettings, Settings
 from app.db.database import Database
 from app.db.models import Project
 from app.db.repositories import sessions as session_repo
 from app.model.provider import ModelProvider, create_provider
 from app.run import run_session
+from app.safety.domain_scope import DomainScope
 from app.services.events import EventHub
 from app.storage.manager import SessionStorage
 from app.storage.paths import new_session_id
@@ -35,8 +39,11 @@ class SessionError(Exception):
 
 @dataclass
 class Confirmation:
+    """Something the user must answer: a risky action (allow?) or a hand-over (continue?)."""
+
     id: str
-    action: str
+    kind: str  # risky_action | login_required | mfa | captcha | agent_request
+    message: str
     future: asyncio.Future
 
 
@@ -64,6 +71,7 @@ class SessionManager:
         max_concurrent: int = 1,
         runner: Callable[..., Any] = run_session,
         provider_factory: Callable[[ModelSettings], ModelProvider] = create_provider,
+        login_headless: bool = False,
     ):
         self.db = db
         self.settings = settings
@@ -72,7 +80,10 @@ class SessionManager:
         self.max_concurrent = max_concurrent
         self.runner = runner
         self.provider_factory = provider_factory
+        self.login_headless = login_headless  # tests only: a real login needs a visible browser
         self.running: dict[str, Running] = {}
+        self.login_setups: dict[str, asyncio.Task] = {}  # project id -> open login browser
+        self._login_done: dict[str, asyncio.Event] = {}
 
     # ------------------------------------------------------------------ lifecycle
 
@@ -93,6 +104,8 @@ class SessionManager:
             raise SessionError(f"session is {row.status}; only a new session can be started")
         if any(r.project_id == project.id for r in self.running.values()):
             raise SessionError("this project already has a running session (one browser profile, one session)")
+        if project.id in self.login_setups:
+            raise SessionError("the login browser for this project is still open; click Done first")
         if len(self.running) >= self.max_concurrent:
             raise SessionError(f"{self.max_concurrent} session(s) already running")
 
@@ -138,6 +151,8 @@ class SessionManager:
             return await session_repo.mark_interrupted(db)
 
     async def shutdown(self) -> None:
+        for project_id in list(self.login_setups):
+            await self.finish_login(project_id)
         tasks = [r.task for r in self.running.values() if r.task]
         for session_id in list(self.running):
             await self.stop(session_id)
@@ -152,8 +167,54 @@ class SessionManager:
         return {
             "status": running.status,
             **running.live,
-            "pending_confirmation": {"id": pending.id, "action": pending.action} if pending else None,
+            "pending_confirmation": (
+                {"id": pending.id, "kind": pending.kind, "action": pending.message} if pending else None
+            ),
         }
+
+    # ------------------------------------------------------------------ login setup
+
+    async def open_login(self, project: Project) -> None:
+        """Open a visible browser with the project's profile so the user can log in once."""
+        if not project.persistent_profile:
+            raise SessionError("this project does not keep logins between tests")
+        if project.id in self.login_setups:
+            raise SessionError("the login browser is already open")
+        if any(r.project_id == project.id for r in self.running.values()):
+            raise SessionError("a test is running for this project")
+        done = asyncio.Event()
+        self._login_done[project.id] = done
+        self.login_setups[project.id] = asyncio.create_task(self._login(project, done))
+
+    async def finish_login(self, project_id: str) -> None:
+        task = self.login_setups.get(project_id)
+        if task is None:
+            raise SessionError("no login browser is open for this project")
+        self._login_done[project_id].set()
+        await asyncio.gather(task, return_exceptions=True)
+
+    async def _login(self, project: Project, done: asyncio.Event) -> None:
+        storage = SessionStorage.create(self.sessions_dir.parent / "login-setup")
+        browser = BrowserSession(
+            DomainScope.from_target(project.target_url, list(project.allowed_domains or [])),
+            storage,
+            BrowserConfig(headless=self.login_headless,
+                          channel="chrome" if self.settings.browser.channel == "chrome" else None,
+                          profile_dir=profile_dir_for(project.id), trace=False),
+        )
+        try:
+            await browser.start()
+            await browser.navigate(project.target_url)
+            while not done.is_set() and not browser.closed:
+                try:
+                    await asyncio.wait_for(done.wait(), timeout=1)
+                except TimeoutError:
+                    pass
+        finally:
+            await browser.stop()
+            shutil.rmtree(storage.root, ignore_errors=True)  # nothing to keep; the profile holds the login
+            self.login_setups.pop(project.id, None)
+            self._login_done.pop(project.id, None)
 
     # ------------------------------------------------------------------ internals
 
@@ -169,7 +230,8 @@ class SessionManager:
                 project=project.id if project.persistent_profile else None,
                 allow_domains=list(project.allowed_domains or []),
                 on_event=lambda e: self._on_event(running, e),
-                confirm=lambda action: self._ask(running, action),
+                confirm=lambda action: self._ask(running, "risky_action", action),
+                ask_user=lambda kind, message: self._ask(running, kind, message),
                 storage=storage,
                 control=running.control,
                 provider_factory=self.provider_factory,
@@ -205,15 +267,15 @@ class SessionManager:
             live["bugs_found"] += 1
         self.hub.publish(running.session_id, event)
 
-    async def _ask(self, running: Running, action: str) -> bool:
-        """Risky action: wait for the user. The time spent waiting does not count against the budget."""
-        confirmation = Confirmation(id=secrets.token_hex(4), action=action,
+    async def _ask(self, running: Running, kind: str, message: str) -> bool:
+        """Wait for the user (risky action or hand-over). Waiting time does not count against the budget."""
+        confirmation = Confirmation(id=secrets.token_hex(4), kind=kind, message=message,
                                     future=asyncio.get_running_loop().create_future())
         running.confirmation = confirmation
         running.control.pause()
         await self._set_status(running, "WAITING_FOR_USER")
-        self.hub.publish(running.session_id, {"type": "confirmation_required",
-                                              "confirmation_id": confirmation.id, "action": action})
+        self.hub.publish(running.session_id, {"type": "confirmation_required", "confirmation_id": confirmation.id,
+                                              "kind": kind, "action": message})
         try:
             allowed = await confirmation.future
         finally:

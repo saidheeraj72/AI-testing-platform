@@ -30,6 +30,7 @@ def create_app(
     runner: Callable[..., Any] = run_session,
     provider_factory: Callable[[ModelSettings], ModelProvider] = create_provider,
     extra_hosts: frozenset[str] = frozenset(),
+    login_headless: bool = False,
 ) -> FastAPI:
     db = Database(db_path or database_path())
     hub = EventHub()
@@ -37,7 +38,7 @@ def create_app(
     root.mkdir(parents=True, exist_ok=True)
     manager = SessionManager(db=db, settings=settings, hub=hub, sessions_dir=root,
                              max_concurrent=settings.server.max_concurrent_sessions,
-                             runner=runner, provider_factory=provider_factory)
+                             runner=runner, provider_factory=provider_factory, login_headless=login_headless)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -54,7 +55,7 @@ def create_app(
     app.add_middleware(LocalOnlyMiddleware, token=token, allowed_origins=settings.server.allowed_origins,
                        extra_hosts=extra_hosts)
     app.add_middleware(CORSMiddleware, allow_origins=settings.server.allowed_origins,
-                       allow_methods=["GET", "POST"], allow_headers=["Content-Type", TOKEN_HEADER])
+                       allow_methods=["GET", "POST", "PATCH"], allow_headers=["Content-Type", TOKEN_HEADER])
     for router in (system.router, projects.router, sessions.router, websocket.router):
         app.include_router(router)
     return app

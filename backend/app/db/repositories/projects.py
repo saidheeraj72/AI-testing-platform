@@ -27,3 +27,10 @@ async def get(db: AsyncSession, project_id: str) -> Project | None:
 
 async def list_all(db: AsyncSession) -> list[Project]:
     return list((await db.scalars(select(Project).order_by(Project.created_at.desc()))).all())
+
+
+async def update(db: AsyncSession, project: Project, **fields) -> Project:
+    for key, value in fields.items():
+        setattr(project, key, value)
+    await db.commit()
+    return project

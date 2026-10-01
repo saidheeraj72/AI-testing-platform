@@ -1,5 +1,5 @@
 // Folds the session's event stream (WebSocket, replayed from the start) into the running view.
-import type { AgentEvent, Criterion, StepStatus } from "../api/types";
+import type { AgentEvent, Criterion, Pending, StepStatus } from "../api/types";
 import { describeCriterion } from "./criteria";
 
 export interface LiveCheck {
@@ -31,7 +31,7 @@ export interface Activity {
 export interface LiveSession {
   steps: LiveStep[];
   activity: Activity[];
-  pendingConfirmation: { id: string; action: string } | null;
+  pendingConfirmation: Pending | null;
   paused: boolean;
   bugs: { id: string; title: string; severity: string }[];
   analyzing: boolean;
@@ -103,7 +103,11 @@ export function reduceEvent(state: LiveSession, e: AgentEvent): LiveSession {
     case "action_completed": {
       const target = e.target as { role: string; name: string } | null;
       const text = `${e.action}${target ? ` ${target.role} "${target.name}"` : ""}`;
-      log("action", text, { ok: e.ok as boolean, detail: e.ok ? undefined : `${e.error}: ${e.message}` });
+      let detail = e.ok ? undefined : `${e.error}: ${e.message}`;
+      if (e.error === "BLOCKED_NAVIGATION") {
+        detail += " If this site is part of the login (single sign-on), add it to the project's extra allowed domains.";
+      }
+      log("action", text, { ok: e.ok as boolean, detail });
       break;
     }
     case "checks":
@@ -112,14 +116,20 @@ export function reduceEvent(state: LiveSession, e: AgentEvent): LiveSession {
     case "step_finished":
       updateStep(e.step as number, { status: e.status as StepStatus, reason: e.reason as string });
       break;
-    case "confirmation_required":
-      s.pendingConfirmation = { id: e.confirmation_id as string, action: e.action as string };
-      log("confirm", `Waiting for your approval: ${e.action}`);
+    case "confirmation_required": {
+      const kind = (e.kind as string) ?? "risky_action";
+      s.pendingConfirmation = { id: e.confirmation_id as string, kind, action: e.action as string };
+      log("confirm", kind === "risky_action" ? `Waiting for your approval: ${e.action}` : `Needs you: ${e.action}`);
       break;
-    case "confirmation_answered":
+    }
+    case "confirmation_answered": {
+      const risky = (s.pendingConfirmation?.kind ?? "risky_action") === "risky_action";
       s.pendingConfirmation = null;
-      log("confirm", e.allowed ? "You allowed the action" : "You refused the action", { ok: e.allowed as boolean });
+      const text = risky ? (e.allowed ? "You allowed the action" : "You refused the action")
+                         : (e.allowed ? "You continued the test" : "You skipped this step");
+      log("confirm", text, { ok: e.allowed as boolean });
       break;
+    }
     case "paused":
       s.paused = true;
       log("info", "Paused. You have control of the browser.");

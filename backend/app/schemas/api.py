@@ -34,6 +34,12 @@ class ProjectCreate(BaseModel):
         return v
 
 
+class ProjectUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=200)
+    allowed_domains: list[str] | None = None
+    persistent_profile: bool | None = None
+
+
 class ProjectOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

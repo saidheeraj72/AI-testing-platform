@@ -2,7 +2,7 @@
 
 A local AI agent that tests a website in a real, visible browser and writes a bug report you can trust.
 
-**Status: Phase 5 (React UI) done.** Next up is Phase 6: human takeover and auth polish.
+**Status: Phase 6 (human takeover and login) done.**
 
 | Phase | Scope | Status |
 |---|---|---|
@@ -12,7 +12,7 @@ A local AI agent that tests a website in a real, visible browser and writes a bu
 | 3 | Detectors, baseline, bug analyzer, dedup | done |
 | 4 | FastAPI + SQLite | done |
 | 5 | React UI | done |
-| 6 | Human takeover and auth polish | next |
+| 6 | Human takeover and auth polish | done |
 | 7 | Tauri packaging | |
 
 ## Setup
@@ -178,6 +178,21 @@ SEEDED_APP_URL=http://localhost:3000 uv run pytest         # also the seeded-app
 - **Unchecked steps.** Intermediate steps the planner couldn't write a usable check for complete on the executor's word, after at least one action, and the report marks them. The last step must always have code-evaluated checks.
 - **Recovery.** A step that stalls (the action limit, the same action repeated three times, or the page not changing) is replanned from the current page. Grounded checks are carried into the new plan. After a step that did not pass, the rest are `SKIPPED`.
 - **Session outcome:** `PASS`, `BUGS_FOUND`, `COULD_NOT_VERIFY`, `BLOCKED`, `FAILED` or `CANCELLED`, written to `report.json`. Every model call, with its prompt, response, latency and validation errors, goes to `model_calls.jsonl`.
+
+## When the agent needs you
+
+These are detected in code, on every page the agent reads, so the model never gets to try them itself:
+
+- **CAPTCHA:** the agent never tries to solve it.
+- **MFA or one-time code prompt.**
+- **Login page when the objective gives no credentials.**
+- **Something only a person can do,** like opening an e-mail link; the agent can ask for this itself.
+
+The test pauses, its status becomes `WAITING_FOR_USER`, and the UI tells you what to do. **Continue** makes the agent read the page again; **Skip this step** ends the step as `BLOCKED`. Waiting time doesn't count against the session budget. In the CLI, the same prompts appear in the terminal.
+
+For projects that keep their login, **Set up login** opens Chrome with the project's profile at the target URL. Log in once, click **Done**, and later tests start logged in.
+
+If a navigation is blocked because it's part of the login (single sign-on), add that domain under the project's **Extra allowed domains**.
 
 ## Writing objectives that can find bugs
 
