@@ -50,6 +50,7 @@ async def run_session(
     storage: SessionStorage | None = None,
     control: SessionControl | None = None,
     mode: str = "objective",
+    cdp_endpoint: str | None = None,
     provider_factory: Callable[[ModelSettings], ModelProvider] = create_provider,
 ) -> tuple[SessionStorage, dict[str, Any]]:
     """Run a whole session. Always writes report.json and the trace, even when cancelled or failing.
@@ -81,6 +82,7 @@ async def run_session(
         channel="chrome" if settings.browser.channel == "chrome" else None,
         profile_dir=profile_dir_for(project) if project else None,
         limits=ObservationLimits(max_chars=settings.agent.observation_max_chars),
+        cdp_endpoint=cdp_endpoint,
     ))
     agent = TestAgent(
         objective=objective,

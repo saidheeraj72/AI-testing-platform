@@ -12,7 +12,8 @@ router = APIRouter()
 async def session_events(ws: WebSocket, session_id: str) -> None:
     """Replays the session's events so far, then streams new ones until the session ends."""
     c = ws.app.state.ctx
-    if not websocket_allowed(ws, c.token, c.settings.server.allowed_origins, c.extra_hosts):
+    if not websocket_allowed(ws, c.token, c.settings.server.allowed_origins, c.extra_hosts,
+                             c.settings.server.allow_extension):
         await ws.close(code=1008)
         return
     await ws.accept()

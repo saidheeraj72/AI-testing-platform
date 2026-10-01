@@ -2,7 +2,7 @@
 
 A local AI agent that tests a website in a real, visible browser and writes a bug report you can trust.
 
-**Status: Phases 0–6 and 9 done.** Next: Chrome extension (8), then desktop packaging (7).
+**Status: Phases 0–6, 8 and 9 done.** Next: desktop packaging (7).
 
 | Phase | Scope | Status |
 |---|---|---|
@@ -14,7 +14,7 @@ A local AI agent that tests a website in a real, visible browser and writes a bu
 | 5 | React UI | done |
 | 6 | Human takeover and auth polish | done |
 | 7 | Tauri packaging | |
-| 8 | Chrome extension | next |
+| 8 | Chrome extension | done |
 | 9 | Autonomous exploration | done |
 
 ## Setup
@@ -152,6 +152,7 @@ backend/app/
 backend/tests/             unit tests + browser tests against a local fixture site
 frontend/                  React + TypeScript UI (Vite, react-query); npm test runs the reducer tests
 scripts/dev.py             starts API + UI with a shared token
+extension/                 Chrome extension (Manifest V3) that relays CDP from your tab
 benchmark/
   seeded-app/              React app with switchable seeded bugs (localhost:3000)
   expected-results.yaml    ground truth: bugs, noise, scenarios
@@ -180,6 +181,21 @@ SEEDED_APP_URL=http://localhost:3000 uv run pytest         # also the seeded-app
 - **Unchecked steps.** Intermediate steps the planner couldn't write a usable check for complete on the executor's word, after at least one action, and the report marks them. The last step must always have code-evaluated checks.
 - **Recovery.** A step that stalls (the action limit, the same action repeated three times, or the page not changing) is replanned from the current page. Grounded checks are carried into the new plan. After a step that did not pass, the rest are `SKIPPED`.
 - **Session outcome:** `PASS`, `BUGS_FOUND`, `COULD_NOT_VERIFY`, `BLOCKED`, `FAILED` or `CANCELLED`, written to `report.json`. Every model call, with its prompt, response, latency and validation errors, goes to `model_calls.jsonl`.
+
+## Chrome extension: test your own tab
+
+The extension in [`extension/`](extension/) tests the tab you already have open, using your own logins and cookies:
+
+1. Open `chrome://extensions`, turn on Developer mode, click **Load unpacked**, and choose `extension/`.
+2. In AI Tester, open **Chrome extension** and copy the API token into the extension's settings. The token changes each time AI Tester starts.
+3. On any page, click the AI Tester icon, describe the test (or choose Explore), and click **Test this tab**.
+
+**How it works.** The extension attaches `chrome.debugger` to that one tab and relays the Chrome DevTools Protocol to the local API (`/api/relay/{id}/extension`). The API presents the relay to Playwright as a browser (`/api/relay/{id}/cdp`), so the agent, the checks and the evidence capture all run unchanged in your tab.
+
+- The relay never forwards commands that would close your browser or tab.
+- Chrome shows its "is being debugged" bar while a test runs; closing it stops the test.
+- The test stays within the tab's site.
+- The API accepts the extension's `chrome-extension://` origin, but every request still needs the token.
 
 ## Exploration mode
 

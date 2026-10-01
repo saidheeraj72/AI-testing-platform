@@ -46,3 +46,4 @@ host = "127.0.0.1"                   # loopback only; the API drives a logged-in
 port = 8765
 allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173", "tauri://localhost", "http://tauri.localhost"]
 max_concurrent_sessions = 1
+allow_extension = true               # the Chrome extension may call the API (it still needs the token)

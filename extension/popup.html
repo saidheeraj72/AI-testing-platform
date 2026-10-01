@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <h1>AI Tester</h1>
+  <form id="form">
+    <div class="modes" role="radiogroup" aria-label="Kind of test">
+      <label><input type="radio" name="mode" value="objective" checked /> Test an objective</label>
+      <label><input type="radio" name="mode" value="explore" /> Explore</label>
+    </div>
+    <label for="objective" id="objective-label">What should I test on this page?</label>
+    <textarea id="objective" rows="4" placeholder="Create a customer and verify it appears in the list."></textarea>
+    <button type="submit" id="start">Test this tab</button>
+  </form>
+  <div id="running" hidden>
+    <p>A test is running in this tab. Follow it in AI Tester.</p>
+    <a id="open" target="_blank">Open the test</a>
+    <button id="stop" class="secondary">Stop</button>
+  </div>
+  <p id="error" role="alert"></p>
+  <p class="hint">Uses your logins in this browser. Chrome shows that the tab is being debugged while the test runs.
+    <a href="options.html" target="_blank">Settings</a></p>
+  <script src="popup.js" type="module"></script>
+</body>
+</html>

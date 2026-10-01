@@ -130,6 +130,25 @@ def test_dns_rebinding_host_is_rejected(client):
     assert client.get("/api/projects", headers={"Host": "127.0.0.1:8765"}).status_code == 200
 
 
+def test_extension_origin_is_accepted_but_still_needs_the_token(client):
+    ext = {"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"}
+    assert client.get("/api/projects", headers=ext).status_code == 200
+    assert client.get("/api/projects", headers={**ext, "X-AI-Tester-Token": "wrong"}).status_code == 401
+    assert client.get("/api/projects", headers={"Origin": "chrome-extension://not-an-id"}).status_code == 403
+
+
+def test_tab_session_creates_a_browser_project(client):
+    r = client.post("/api/tab-sessions", json={"url": "https://app.example.com/orders?x=1", "objective": "Check it"})
+    assert r.status_code == 201
+    data = r.json()
+    assert data["relay_path"] == f"/api/relay/{data['session_id']}/extension"
+    project = client.get(f"/api/projects/{data['project_id']}").json()
+    assert (project["target_url"], project["persistent_profile"]) == ("https://app.example.com", False)
+    assert client.get(f"/api/sessions/{data['session_id']}").json()["browser"] == "tab"
+    client.post(f"/api/sessions/{data['session_id']}/stop")
+    wait_until(client, data["session_id"])
+
+
 def test_foreign_origin_is_rejected(client):
     assert client.get("/api/projects", headers={"Origin": "https://evil.example"}).status_code == 403
     assert client.get("/api/projects", headers={"Origin": ORIGIN}).status_code == 200

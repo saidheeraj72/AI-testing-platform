@@ -71,6 +71,7 @@ class SessionOut(BaseModel):
     project_id: str
     objective: str
     mode: str = "objective"
+    browser: str = "managed"
     status: str
     outcome: str | None
     reason: str | None
@@ -140,6 +141,29 @@ class Coverage(BaseModel):
     pages_visited: int
     could_not_verify: list[dict[str, Any]] = Field(default_factory=list)
     not_tested: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class TabSessionCreate(BaseModel):
+    """From the Chrome extension: test the user's current tab."""
+
+    url: str
+    mode: Literal["objective", "explore"] = "objective"
+    objective: str = Field("", max_length=4000)
+
+    @field_validator("url")
+    @classmethod
+    def _valid_url(cls, v: str) -> str:
+        try:
+            DomainScope.from_target(v)
+        except ScopeError as e:
+            raise ValueError(str(e)) from None
+        return v
+
+    @model_validator(mode="after")
+    def _objective_needed(self) -> TabSessionCreate:
+        if self.mode == "objective" and len(self.objective.strip()) < 3:
+            raise ValueError("objective is required (at least 3 characters)")
+        return self
 
 
 class ConfirmationAnswer(BaseModel):

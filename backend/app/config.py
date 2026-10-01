@@ -75,6 +75,7 @@ class ServerSettings(_Strict):
         "tauri://localhost", "http://tauri.localhost",   # packaged app
     ]
     max_concurrent_sessions: int = Field(1, ge=1)
+    allow_extension: bool = True  # accept the AI Tester Chrome extension's origin (it still needs the token)
 
 
 class Settings(_Strict):

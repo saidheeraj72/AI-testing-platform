@@ -68,6 +68,7 @@ class BrowserConfig:
     settle_quiet_ms: int = 400
     trace: bool = True
     limits: ObservationLimits = field(default_factory=ObservationLimits)
+    cdp_endpoint: str | None = None  # connect to an existing tab (Chrome extension relay) instead of launching
 
 
 class _Failure(Exception):
@@ -131,8 +132,11 @@ class BrowserSession:
             await ctx.route(lambda url: not self.scope.allows(url), self._guard_navigation)
             self.network.attach(ctx)
             if self.config.trace:
-                await ctx.tracing.start(screenshots=True, snapshots=True, sources=False)
-                self._tracing = True
+                try:
+                    await ctx.tracing.start(screenshots=True, snapshots=True, sources=False)
+                    self._tracing = True
+                except PlaywrightError as e:  # not every connection supports tracing
+                    log.warning("tracing unavailable: %s", _first_line(e))
 
             self.page = ctx.pages[0] if ctx.pages else await ctx.new_page()
             self._attach_page(self.page)
@@ -178,6 +182,14 @@ class BrowserSession:
     async def _launch(self) -> None:
         assert self._playwright is not None
         cfg = self.config
+        if cfg.cdp_endpoint:
+            try:
+                self._browser = await self._playwright.chromium.connect_over_cdp(cfg.cdp_endpoint)
+            except PlaywrightError as e:
+                raise BrowserLaunchError(f"Could not connect to the browser tab: {_first_line(e)}") from None
+            self._context = self._browser.contexts[0]
+            self.browser_channel = "user tab (extension)"
+            return
         viewport = {"width": cfg.viewport_width, "height": cfg.viewport_height}
         if cfg.profile_dir:
             cfg.profile_dir.mkdir(parents=True, exist_ok=True)
@@ -209,6 +221,11 @@ class BrowserSession:
             await self._context.tracing.stop(path=str(self.storage.paths.trace))
 
     async def _close_context(self) -> None:
+        if self.config.cdp_endpoint:
+            # The user's own browser: disconnect only, never close their tab or window.
+            if self._browser:
+                await self._browser.close()
+            return
         if self._context and not self._context_closed:
             await self._context.close()
         if self._browser:

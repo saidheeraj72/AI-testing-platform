@@ -3,6 +3,8 @@ export const API_URL: string = import.meta.env.VITE_API_URL ?? "http://127.0.0.1
 const TOKEN: string = import.meta.env.VITE_API_TOKEN ?? "";
 
 export const hasToken = TOKEN !== "";
+/** For pairing the Chrome extension, which needs the same token. */
+export const apiToken = () => TOKEN;
 
 export class ApiError extends Error {
   constructor(

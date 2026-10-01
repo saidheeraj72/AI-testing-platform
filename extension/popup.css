@@ -1,0 +1,9 @@
+body { width: 320px; font: 14px system-ui, sans-serif; margin: 12px; color: #16202e; }
+h1 { font-size: 16px; margin: 0 0 10px; }
+label { display: block; font-weight: 600; margin: 8px 0 4px; }
+.modes label { display: inline-flex; gap: 4px; font-weight: 400; margin-right: 10px; }
+textarea, input { width: 100%; box-sizing: border-box; font: inherit; padding: 6px; border: 1px solid #d0d6de; border-radius: 6px; }
+button { margin-top: 10px; font: inherit; font-weight: 600; padding: 7px 12px; border-radius: 6px; border: 1px solid #3355d1; background: #3355d1; color: #fff; cursor: pointer; }
+button.secondary { background: transparent; color: #3355d1; }
+#error { color: #b3261e; }
+.hint { color: #5f6b7a; font-size: 12px; }

@@ -50,6 +50,8 @@ function Header({ session: s }: { session: SessionDetail }) {
       <div>
         <div className="row small muted" style={{ marginBottom: "0.3rem" }}>
           {project && <span>{project.name} · {project.target_url}</span>}
+          {s.browser === "tab" && <span>· your Chrome tab</span>}
+          {s.mode === "explore" && <span>· exploration</span>}
           {s.model && <span>· {s.model}</span>}
         </div>
         <h1>{s.objective}</h1>
@@ -123,8 +125,10 @@ function LiveView({ session: s, live }: { session: SessionDetail; live: LiveSess
           </div>
         </div>
         <p className="small muted" style={{ margin: "0.75rem 0 0" }}>
-          The test runs in a Chrome window on your desktop. Clicking in that window while the agent is working can
-          confuse it; use Take control first.
+          {s.browser === "tab"
+            ? "The test runs in your own Chrome tab (via the extension)."
+            : "The test runs in a Chrome window on your desktop."}{" "}
+          Clicking in that window while the agent is working can confuse it; use Take control first.
           {live.analyzing && " Analysing what was found…"}
         </p>
         {control.isError && <div className="error-box" style={{ marginTop: "0.5rem" }}>{control.error.message}</div>}

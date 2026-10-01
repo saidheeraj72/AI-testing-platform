@@ -28,10 +28,12 @@ from app.model.provider import ModelProvider, create_provider
 from app.run import run_session
 from app.safety.domain_scope import DomainScope
 from app.services.events import EventHub
+from app.services.relay import CDPRelay
 from app.storage.manager import SessionStorage
 from app.storage.paths import new_session_id
 
 log = logging.getLogger(__name__)
+EXTENSION_CONNECT_TIMEOUT = 30.0
 
 
 class SessionError(Exception):
@@ -73,6 +75,8 @@ class SessionManager:
         runner: Callable[..., Any] = run_session,
         provider_factory: Callable[[ModelSettings], ModelProvider] = create_provider,
         login_headless: bool = False,
+        relay_base: str = "ws://127.0.0.1:8765",
+        relay_token: str = "",
     ):
         self.db = db
         self.settings = settings
@@ -82,20 +86,25 @@ class SessionManager:
         self.runner = runner
         self.provider_factory = provider_factory
         self.login_headless = login_headless  # tests only: a real login needs a visible browser
+        self.relay_base = relay_base  # where Playwright reaches this server's relay WebSocket
+        self.relay_token = relay_token
         self.running: dict[str, Running] = {}
         self.login_setups: dict[str, asyncio.Task] = {}  # project id -> open login browser
+        self.relays: dict[str, CDPRelay] = {}  # tab sessions: session id -> relay to the extension
         self._login_done: dict[str, asyncio.Event] = {}
 
     # ------------------------------------------------------------------ lifecycle
 
-    async def create(self, project: Project, objective: str, mode: str = "objective") -> str:
+    async def create(self, project: Project, objective: str, mode: str = "objective", browser: str = "managed") -> str:
         session_id = new_session_id()
         SessionStorage.create(self.sessions_dir, session_id)
         if mode == "explore" and not objective.strip():
             objective = DEFAULT_OBJECTIVE
         async with self.db.session() as db:
             await session_repo.create(db, session_id=session_id, project_id=project.id, objective=objective,
-                                      model=self.settings.model.executor.name, mode=mode)
+                                      model=self.settings.model.executor.name, mode=mode, browser=browser)
+        if browser == "tab":
+            self.relays[session_id] = CDPRelay(session_id)
         return session_id
 
     async def start(self, session_id: str, project: Project) -> None:
@@ -226,7 +235,9 @@ class SessionManager:
         session_id = running.session_id
         storage = SessionStorage(session_id, self.sessions_dir / session_id)
         final = "COMPLETED"
+        relay = self.relays.get(session_id)
         try:
+            cdp_endpoint = await self._wait_for_extension(relay) if relay else None
             await self.runner(
                 url=project.target_url,
                 objective=objective,
@@ -240,6 +251,7 @@ class SessionManager:
                 control=running.control,
                 provider_factory=self.provider_factory,
                 mode=mode,
+                **({"cdp_endpoint": cdp_endpoint} if cdp_endpoint else {}),
             )
         except asyncio.CancelledError:
             final = "CANCELLED"
@@ -249,6 +261,9 @@ class SessionManager:
             self.hub.publish(session_id, {"type": "session_failed", "error": str(e)})
         finally:
             self.running.pop(session_id, None)
+            if relay:
+                await relay.close()
+                self.relays.pop(session_id, None)
             try:
                 async with self.db.session() as db:
                     await session_repo.save_results(db, session_id, storage, final)
@@ -256,6 +271,13 @@ class SessionManager:
                 log.exception("could not save results of %s", session_id)
             self.hub.publish(session_id, {"type": "session_saved", "status": final})
             self.hub.close(session_id)
+
+    async def _wait_for_extension(self, relay: CDPRelay) -> str:
+        try:
+            await asyncio.wait_for(relay.extension_connected.wait(), EXTENSION_CONNECT_TIMEOUT)
+        except TimeoutError:
+            raise RuntimeError("the Chrome extension did not connect to this session") from None
+        return f"{self.relay_base}/api/relay/{relay.relay_id}/cdp?token={self.relay_token}"
 
     def _on_event(self, running: Running, event: dict[str, Any]) -> None:
         live = running.live

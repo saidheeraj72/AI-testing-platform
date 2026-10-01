@@ -51,6 +51,7 @@ export interface Session {
   project_id: string;
   objective: string;
   mode: "objective" | "explore";
+  browser: "managed" | "tab";
   status: SessionStatus;
   outcome: Outcome | null;
   reason: string | null;

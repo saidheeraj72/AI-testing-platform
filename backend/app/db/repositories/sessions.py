@@ -15,8 +15,9 @@ ACTIVE_STATUSES = ("RUNNING", "PAUSED", "WAITING_FOR_USER")
 
 
 async def create(db: AsyncSession, *, session_id: str, project_id: str, objective: str, model: str,
-                 mode: str = "objective") -> Session:
-    row = Session(id=session_id, project_id=project_id, objective=objective, status="CREATED", model=model, mode=mode)
+                 mode: str = "objective", browser: str = "managed") -> Session:
+    row = Session(id=session_id, project_id=project_id, objective=objective, status="CREATED", model=model,
+                  mode=mode, browser=browser)
     db.add(row)
     await db.commit()
     return row
@@ -144,3 +145,9 @@ def _read_jsonl(path) -> list[dict[str, Any]]:
 
 def _dt(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value) if value else None
+
+
+async def find_project_by_url(db: AsyncSession, target_url: str):
+    from app.db.models import Project
+
+    return await db.scalar(select(Project).where(Project.target_url == target_url))

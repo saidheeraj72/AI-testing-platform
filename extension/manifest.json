@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "AI Tester",
+  "version": "0.1.0",
+  "description": "Test the current tab with AI Tester running on this computer.",
+  "permissions": ["debugger", "tabs", "storage", "activeTab"],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_popup": "popup.html", "default_title": "Test this tab with AI Tester" },
+  "options_page": "options.html"
+}
